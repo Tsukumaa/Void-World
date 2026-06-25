@@ -142,6 +142,9 @@ const PLACED_HOUSES = [
 
 export default function GameCanvas({ room, username }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const chatInputRef = useRef<HTMLInputElement>(null);
+  const chatOpenRef  = useRef(false);
+  const appRef       = useRef<Application | null>(null);
 
   useEffect(() => {
     let app: Application | null = null;
@@ -149,7 +152,11 @@ export default function GameCanvas({ room, username }: Props) {
 
     const keys = new Set<string>();
     const isDown = (k: string) => keys.has(k);
-    const onKeyDown = (e: KeyboardEvent) => keys.add(e.key.toLowerCase());
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (chatOpenRef.current) return;
+      if (e.key === "Enter") { chatOpenRef.current = true; chatInputRef.current?.focus(); return; }
+      keys.add(e.key.toLowerCase());
+    };
     const onKeyUp   = (e: KeyboardEvent) => keys.delete(e.key.toLowerCase());
     const onBlur    = () => keys.clear();
     window.addEventListener("keydown",  onKeyDown);
@@ -159,6 +166,7 @@ export default function GameCanvas({ room, username }: Props) {
 
     (async () => {
       app = new Application();
+      appRef.current = app;
       await app.init({
         width: window.innerWidth,
         height: window.innerHeight,
@@ -244,6 +252,40 @@ export default function GameCanvas({ room, username }: Props) {
         return container;
       }
 
+      function showChatBubble(sprite: Container, text: string) {
+        const existing = sprite.getChildByLabel("bubble");
+        if (existing) sprite.removeChild(existing);
+
+        const bubble = new Container();
+        bubble.label = "bubble";
+
+        const style = new TextStyle({ fontSize: 10, fill: 0x222222, fontFamily: "monospace", wordWrap: true, wordWrapWidth: 120 });
+        const txt = new Text({ text, style });
+        const pad = 5;
+        const bw = txt.width + pad * 2;
+        const bh = txt.height + pad * 2;
+        const bg = new Graphics();
+        bg.roundRect(0, 0, bw, bh, 4).fill({ color: 0xffffff, alpha: 0.92 });
+        // petite flèche en bas
+        bg.moveTo(bw / 2 - 4, bh).lineTo(bw / 2 + 4, bh).lineTo(bw / 2, bh + 6).fill({ color: 0xffffff, alpha: 0.92 });
+        txt.x = pad;
+        txt.y = pad;
+        bubble.addChild(bg);
+        bubble.addChild(txt);
+        bubble.x = 10 - bw / 2;
+        bubble.y = -bh - 42;
+
+        sprite.addChild(bubble);
+
+        let elapsed = 0;
+        const tickFn = (t: { deltaMS: number }) => {
+          elapsed += t.deltaMS;
+          if (elapsed > 4000) bubble.alpha = Math.max(0, 1 - (elapsed - 4000) / 800);
+          if (elapsed > 4800) { sprite.removeChild(bubble); appRef.current?.ticker.remove(tickFn); }
+        };
+        appRef.current?.ticker.add(tickFn);
+      }
+
       const startX = (MAP_COLS * TILE_SIZE) / 2;
       const startY = (MAP_ROWS * TILE_SIZE) / 2;
 
@@ -268,6 +310,10 @@ export default function GameCanvas({ room, username }: Props) {
         if (msg.type === "player_move") {
           const s = playerSprites.get(msg.id);
           if (s) { s.x = msg.x; s.y = msg.y; }
+        }
+        if (msg.type === "chat") {
+          const s = msg.id === room.id ? localSprite : playerSprites.get(msg.id);
+          if (s) showChatBubble(s, msg.text);
         }
       });
 
@@ -310,6 +356,34 @@ export default function GameCanvas({ room, username }: Props) {
   }, [room]);
 
   return (
-    <div ref={containerRef} style={{ width: "100vw", height: "100vh", overflow: "hidden" }} />
+    <div style={{ width: "100vw", height: "100vh", overflow: "hidden", position: "relative" }}>
+      <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
+      <div style={{ position: "absolute", bottom: 16, left: "50%", transform: "translateX(-50%)", width: 320 }}>
+        <input
+          ref={chatInputRef}
+          maxLength={100}
+          placeholder="Appuie sur Entrée pour chatter..."
+          onFocus={() => { chatOpenRef.current = true; }}
+          onBlur={() => { chatOpenRef.current = false; }}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === "Escape") { chatOpenRef.current = false; e.currentTarget.blur(); e.currentTarget.value = ""; }
+            if (e.key === "Enter") {
+              const text = e.currentTarget.value.trim();
+              if (text) room.send("chat", { text });
+              e.currentTarget.value = "";
+              chatOpenRef.current = false;
+              e.currentTarget.blur();
+            }
+          }}
+          style={{
+            width: "100%", padding: "8px 12px", borderRadius: 20,
+            background: "rgba(0,0,0,0.55)", color: "#fff", border: "1px solid rgba(255,255,255,0.2)",
+            outline: "none", fontSize: 13, fontFamily: "monospace",
+            backdropFilter: "blur(4px)",
+          }}
+        />
+      </div>
+    </div>
   );
 }
