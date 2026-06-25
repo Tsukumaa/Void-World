@@ -21,6 +21,7 @@ export interface WorldRoom {
 export function useWorldRoom(username: string) {
   const [room, setRoom] = useState<WorldRoom | null>(null);
   const [connected, setConnected] = useState(false);
+  const [onlinePlayers, setOnlinePlayers] = useState<Map<string, PlayerState>>(new Map());
   const wsRef = useRef<WebSocket | null>(null);
   const handlersRef = useRef<((msg: any) => void)[]>([]);
 
@@ -32,6 +33,8 @@ export function useWorldRoom(username: string) {
 
     const players = new Map<string, PlayerState>();
     let localId = "";
+
+    function syncPlayers() { setOnlinePlayers(new Map(players)); }
 
     const roomObj: WorldRoom = {
       get id() { return localId; },
@@ -52,12 +55,15 @@ export function useWorldRoom(username: string) {
       if (msg.type === "init") {
         localId = msg.id;
         msg.players.forEach((p: PlayerState) => players.set(p.id, p));
+        // ajouter le joueur local
+        players.set(localId, { id: localId, username, x: 0, y: 0, direction: "down", moving: false });
         setConnected(true);
         setRoom({ ...roomObj });
+        syncPlayers();
       }
 
-      if (msg.type === "player_join") players.set(msg.player.id, msg.player);
-      if (msg.type === "player_leave") players.delete(msg.id);
+      if (msg.type === "player_join") { players.set(msg.player.id, msg.player); syncPlayers(); }
+      if (msg.type === "player_leave") { players.delete(msg.id); syncPlayers(); }
       if (msg.type === "player_move") {
         const p = players.get(msg.id);
         if (p) { p.x = msg.x; p.y = msg.y; p.direction = msg.direction; p.moving = msg.moving; }
@@ -71,5 +77,5 @@ export function useWorldRoom(username: string) {
     return () => ws.close();
   }, [username]);
 
-  return { room, connected };
+  return { room, connected, onlinePlayers };
 }

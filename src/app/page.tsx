@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { signIn, signOut, useSession } from "next-auth/react";
 import dynamic from "next/dynamic";
 import { useWorldRoom } from "@/hooks/useWorldRoom";
+import SocialPanel from "@/components/SocialPanel";
 
 const GameCanvas = dynamic(() => import("@/components/GameCanvas"), { ssr: false });
 
@@ -12,7 +13,7 @@ export default function Home() {
   const [username, setUsername] = useState("");
   const [usernameInput, setUsernameInput] = useState("");
   const [started, setStarted] = useState(false);
-  const { room, connected } = useWorldRoom(started ? username : "");
+  const { room, connected, onlinePlayers } = useWorldRoom(started ? username : "");
 
   useEffect(() => {
     if (session) {
@@ -135,5 +136,10 @@ export default function Home() {
     );
   }
 
-  return <GameCanvas room={room} username={username} />;
+  return (
+    <>
+      <GameCanvas room={room} username={username} />
+      <SocialPanel room={room} username={username} onlinePlayers={onlinePlayers} />
+    </>
+  );
 }
