@@ -1,0 +1,33 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id        String      @id @default(cuid())
+  username  String      @unique
+  createdAt DateTime    @default(now())
+  house     House?
+  friends   User[]      @relation("Friends")
+  friendOf  User[]      @relation("Friends")
+}
+
+model House {
+  id        String      @id @default(cuid())
+  owner     User        @relation(fields: [ownerId], references: [id])
+  ownerId   String      @unique
+  items     HouseItem[]
+  createdAt DateTime    @default(now())
+}
+
+model HouseItem {
+  id      String @id @default(cuid())
+  house   House  @relation(fields: [houseId], references: [id])
+  houseId String
+  type    String
+  x       Int
+  y       Int
+}
