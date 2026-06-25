@@ -70,10 +70,13 @@ export default function GameCanvas({ room, username }: Props) {
     let destroyed = false;
 
     const keys = new Set<string>();
+    const isDown = (k: string) => keys.has(k);
     const onKeyDown = (e: KeyboardEvent) => keys.add(e.key);
     const onKeyUp = (e: KeyboardEvent) => keys.delete(e.key);
+    const onBlur = () => keys.clear();
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
 
     (async () => {
       app = new Application();
@@ -127,15 +130,53 @@ export default function GameCanvas({ room, username }: Props) {
 
       function createPlayerSprite(id: string, name: string, isLocal: boolean) {
         const container = new Container();
+        const color = isLocal ? 0x6c63ff : 0x43aa8b;
+        const skin  = 0xffd6a5;
+        const shadow = new Graphics();
+        shadow.ellipse(10, 30, 9, 4).fill({ color: 0x000000, alpha: 0.18 });
+        container.addChild(shadow);
+        // jambes
+        const legL = new Graphics();
+        legL.roundRect(3, 18, 6, 10, 2).fill(isLocal ? 0x4a4080 : 0x2d6a55);
+        container.addChild(legL);
+        const legR = new Graphics();
+        legR.roundRect(11, 18, 6, 10, 2).fill(isLocal ? 0x4a4080 : 0x2d6a55);
+        container.addChild(legR);
+        // corps
         const body = new Graphics();
-        body.rect(0, 0, 20, 24).fill(isLocal ? 0xe63946 : 0x457b9d);
+        body.roundRect(2, 8, 16, 12, 3).fill(color);
         container.addChild(body);
+        // col
+        const collar = new Graphics();
+        collar.roundRect(6, 7, 8, 4, 2).fill(isLocal ? 0x9b8fff : 0x5ecba1);
+        container.addChild(collar);
+        // bras G
+        const armL = new Graphics();
+        armL.roundRect(0, 9, 4, 9, 2).fill(color);
+        container.addChild(armL);
+        // bras D
+        const armR = new Graphics();
+        armR.roundRect(16, 9, 4, 9, 2).fill(color);
+        container.addChild(armR);
+        // tête
         const head = new Graphics();
-        head.circle(10, -8, 8).fill(0xf4a261);
+        head.roundRect(3, -10, 14, 14, 5).fill(skin);
         container.addChild(head);
-        const label = new Text({ text: name, style: new TextStyle({ fontSize: 10, fill: 0xffffff, fontFamily: "monospace" }) });
+        // yeux
+        const eyeL = new Graphics();
+        eyeL.circle(7, -4, 1.5).fill(0x333333);
+        container.addChild(eyeL);
+        const eyeR = new Graphics();
+        eyeR.circle(13, -4, 1.5).fill(0x333333);
+        container.addChild(eyeR);
+        // cheveux
+        const hair = new Graphics();
+        hair.roundRect(3, -12, 14, 6, 4).fill(isLocal ? 0x3d2b1f : 0x2b3d1f);
+        container.addChild(hair);
+        // pseudo
+        const label = new Text({ text: name, style: new TextStyle({ fontSize: 9, fill: 0xffffff, fontFamily: "monospace", dropShadow: { color: 0x000000, blur: 2, distance: 1 } }) });
         label.x = 10 - label.width / 2;
-        label.y = -22;
+        label.y = -24;
         container.addChild(label);
         world.addChild(container);
         playerSprites.set(id, container);
@@ -174,12 +215,12 @@ export default function GameCanvas({ room, username }: Props) {
 
       app.ticker.add(() => {
         let dx = 0; let dy = 0; let direction = "down";
-        if (keys.has("ArrowUp") || keys.has("z")) { dy = -1; direction = "up"; }
-        if (keys.has("ArrowDown") || keys.has("s")) { dy = 1; direction = "down"; }
-        if (keys.has("ArrowLeft") || keys.has("q")) { dx = -1; direction = "left"; }
-        if (keys.has("ArrowRight") || keys.has("d")) { dx = 1; direction = "right"; }
+        if (isDown("ArrowUp") || isDown("z")) { dy = -1; direction = "up"; }
+        if (isDown("ArrowDown") || isDown("s")) { dy = 1; direction = "down"; }
+        if (isDown("ArrowLeft") || isDown("q")) { dx = -1; direction = "left"; }
+        if (isDown("ArrowRight") || isDown("d")) { dx = 1; direction = "right"; }
 
-        const speed = keys.has("Shift") ? RUN_SPEED : WALK_SPEED;
+        const speed = isDown("Shift") ? RUN_SPEED : WALK_SPEED;
         dx *= speed; dy *= speed;
 
         if (dx !== 0 || dy !== 0) {
@@ -201,6 +242,7 @@ export default function GameCanvas({ room, username }: Props) {
       destroyed = true;
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
       if (app && app.renderer) app.destroy(true);
     };
   }, [room]);
