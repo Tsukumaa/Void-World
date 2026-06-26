@@ -7,13 +7,16 @@ import { useWorldRoom } from "@/hooks/useWorldRoom";
 import SocialPanel from "@/components/SocialPanel";
 
 const GameCanvas = dynamic(() => import("@/components/GameCanvas"), { ssr: false });
+const HouseCanvas = dynamic(() => import("@/components/HouseCanvas"), { ssr: false });
 
 export default function Home() {
   const { data: session, status } = useSession();
   const [username, setUsername] = useState("");
   const [usernameInput, setUsernameInput] = useState("");
   const [started, setStarted] = useState(false);
-  const { room, connected, onlinePlayers } = useWorldRoom(started ? username : "");
+  // "main" = monde, "house:<pseudo>" = maison instanciée
+  const [activeRoom, setActiveRoom] = useState("main");
+  const { room, connected, onlinePlayers } = useWorldRoom(started ? username : "", activeRoom);
 
   useEffect(() => {
     if (session) {
@@ -136,10 +139,36 @@ export default function Home() {
     );
   }
 
+  const isHouse = activeRoom.startsWith("house:");
+  const ownerName = isHouse ? activeRoom.slice("house:".length) : username;
+
+  if (isHouse) {
+    return (
+      <HouseCanvas
+        key={activeRoom}
+        room={room}
+        username={username}
+        ownerName={ownerName}
+        onExit={() => setActiveRoom("main")}
+      />
+    );
+  }
+
   return (
     <>
-      <GameCanvas room={room} username={username} />
+      <GameCanvas key={activeRoom} room={room} username={username} />
       <SocialPanel room={room} username={username} onlinePlayers={onlinePlayers} />
+      <button
+        onClick={() => setActiveRoom(`house:${username}`)}
+        style={{
+          position: "fixed", bottom: 16, right: 16, zIndex: 100,
+          background: "rgba(0,0,0,0.6)", border: "1px solid rgba(255,255,255,0.2)",
+          borderRadius: 10, color: "#fff", padding: "10px 16px", cursor: "pointer",
+          fontSize: 14, fontFamily: "monospace", backdropFilter: "blur(4px)",
+        }}
+      >
+        🏠 Ma maison
+      </button>
     </>
   );
 }

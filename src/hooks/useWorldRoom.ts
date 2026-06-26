@@ -18,7 +18,7 @@ export interface WorldRoom {
   onMessage: (handler: (msg: any) => void) => void;
 }
 
-export function useWorldRoom(username: string) {
+export function useWorldRoom(username: string, roomName: string = "main") {
   const [room, setRoom] = useState<WorldRoom | null>(null);
   const [connected, setConnected] = useState(false);
   const [onlinePlayers, setOnlinePlayers] = useState<Map<string, PlayerState>>(new Map());
@@ -30,11 +30,15 @@ export function useWorldRoom(username: string) {
   useEffect(() => {
     if (!username) return;
     stopped.current = false;
+    setConnected(false);
+    // les handlers sont propres à une connexion/room
+    handlersRef.current = [];
 
     function connect() {
       if (stopped.current) return;
 
-      const ws = new WebSocket(WS_URL);
+      const url = `${WS_URL}?room=${encodeURIComponent(roomName)}`;
+      const ws = new WebSocket(url);
       wsRef.current = ws;
 
       const players = new Map<string, PlayerState>();
@@ -95,7 +99,7 @@ export function useWorldRoom(username: string) {
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
       wsRef.current?.close();
     };
-  }, [username]);
+  }, [username, roomName]);
 
   return { room, connected, onlinePlayers };
 }
