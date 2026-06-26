@@ -61,7 +61,8 @@ export function useWorldRoom(username: string) {
         if (msg.type === "init") {
           localId = msg.id;
           msg.players.forEach((p: PlayerState) => players.set(p.id, p));
-          players.set(localId, { id: localId, username, x: 0, y: 0, direction: "down", moving: false });
+          const self = msg.self ?? { x: 0, y: 0 };
+          players.set(localId, { id: localId, username, x: self.x, y: self.y, direction: "down", moving: false });
           setConnected(true);
           setRoom({ ...roomObj });
           syncPlayers();

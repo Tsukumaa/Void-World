@@ -363,54 +363,97 @@ export default function GameCanvas({ room, username }: Props) {
 
       // Joueurs
       const playerSprites = new Map<string, Container>();
+      const playerParts   = new Map<string, { legL: Container; legR: Container; armL: Container; armR: Container; upper: Container; walkTime: number; moving: boolean; }>();
 
       function createPlayerSprite(id: string, name: string, isLocal: boolean) {
         const container = new Container();
-        const color     = isLocal ? 0x6c63ff : 0x43aa8b;
-        const pantsCol  = isLocal ? 0x4a4080 : 0x2d6a55;
-        const skin      = 0xffd6a5;
+        const color    = isLocal ? 0x6c63ff : 0x43aa8b;
+        const pantsCol = isLocal ? 0x4a4080 : 0x2d6a55;
+        const skin     = 0xffd6a5;
 
+        // Shadow
         const shadow = new Graphics();
         shadow.ellipse(10, 30, 9, 4).fill({ color: C.shadow, alpha: 0.18 });
         container.addChild(shadow);
-        const legL = new Graphics();
-        legL.roundRect(3, 18, 6, 10, 2).fill(pantsCol);
+
+        // Jambes — chaque jambe dans son propre Container pour animer via y
+        const legL = new Container();
+        const legLg = new Graphics().roundRect(0, 0, 6, 10, 2).fill(pantsCol);
+        legL.addChild(legLg);
+        legL.x = 3; legL.y = 18;
         container.addChild(legL);
-        const legR = new Graphics();
-        legR.roundRect(11, 18, 6, 10, 2).fill(pantsCol);
+
+        const legR = new Container();
+        const legRg = new Graphics().roundRect(0, 0, 6, 10, 2).fill(pantsCol);
+        legR.addChild(legRg);
+        legR.x = 11; legR.y = 18;
         container.addChild(legR);
-        const body = new Graphics();
-        body.roundRect(2, 8, 16, 12, 3).fill(color);
-        container.addChild(body);
-        const collar = new Graphics();
-        collar.roundRect(6, 7, 8, 4, 2).fill(isLocal ? 0x9b8fff : 0x5ecba1);
-        container.addChild(collar);
-        const armL = new Graphics();
-        armL.roundRect(0, 9, 4, 9, 2).fill(color);
-        container.addChild(armL);
-        const armR = new Graphics();
-        armR.roundRect(16, 9, 4, 9, 2).fill(color);
-        container.addChild(armR);
-        const head = new Graphics();
-        head.roundRect(3, -10, 14, 14, 5).fill(skin);
-        container.addChild(head);
-        const eyeL = new Graphics();
-        eyeL.circle(7, -4, 1.5).fill(0x333333);
-        container.addChild(eyeL);
-        const eyeR = new Graphics();
-        eyeR.circle(13, -4, 1.5).fill(0x333333);
-        container.addChild(eyeR);
-        const hair = new Graphics();
-        hair.roundRect(3, -12, 14, 6, 4).fill(isLocal ? 0x3d2b1f : 0x2b3d1f);
-        container.addChild(hair);
+
+        // Upper body (corps + bras + tête) dans un Container pour le bob
+        const upper = new Container();
+
+        const body = new Graphics().roundRect(2, 8, 16, 12, 3).fill(color);
+        upper.addChild(body);
+
+        const collar = new Graphics().roundRect(6, 7, 8, 4, 2).fill(isLocal ? 0x9b8fff : 0x5ecba1);
+        upper.addChild(collar);
+
+        const armL = new Container();
+        const armLg = new Graphics().roundRect(0, 0, 4, 9, 2).fill(color);
+        armL.addChild(armLg);
+        armL.x = 0; armL.y = 9;
+        upper.addChild(armL);
+
+        const armR = new Container();
+        const armRg = new Graphics().roundRect(0, 0, 4, 9, 2).fill(color);
+        armR.addChild(armRg);
+        armR.x = 16; armR.y = 9;
+        upper.addChild(armR);
+
+        const head = new Graphics().roundRect(3, -10, 14, 14, 5).fill(skin);
+        upper.addChild(head);
+        const eyeL = new Graphics().circle(7, -4, 1.5).fill(0x333333);
+        upper.addChild(eyeL);
+        const eyeR = new Graphics().circle(13, -4, 1.5).fill(0x333333);
+        upper.addChild(eyeR);
+        const hair = new Graphics().roundRect(3, -12, 14, 6, 4).fill(isLocal ? 0x3d2b1f : 0x2b3d1f);
+        upper.addChild(hair);
+
+        container.addChild(upper);
+
         const label = new Text({ text: name, style: new TextStyle({ fontSize: 9, fill: 0xffffff, fontFamily: "monospace", dropShadow: { color: 0x000000, blur: 2, distance: 1 } }) });
         label.x = 10 - label.width / 2;
         label.y = -24;
         container.addChild(label);
+
+        playerParts.set(id, { legL, legR, armL, armR, upper, walkTime: 0, moving: false });
         world.addChild(container);
         playerSprites.set(id, container);
         return container;
       }
+
+      // ticker global d'animation
+      app.ticker.add((ticker) => {
+        const deltaMS = ticker.deltaMS;
+        playerParts.forEach((parts) => {
+          if (parts.moving) {
+            parts.walkTime += deltaMS * 0.007;
+            const swing = Math.sin(parts.walkTime);
+            parts.legL.y  = 18 + swing * 6;
+            parts.legR.y  = 18 - swing * 6;
+            parts.armL.y  = 9  - swing * 5;
+            parts.armR.y  = 9  + swing * 5;
+            parts.upper.y = -Math.abs(swing) * 2;
+          } else {
+            parts.walkTime = 0;
+            parts.legL.y  = 18;
+            parts.legR.y  = 18;
+            parts.armL.y  = 9;
+            parts.armR.y  = 9;
+            parts.upper.y = 0;
+          }
+        });
+      });
 
       function showChatBubble(sprite: Container, text: string) {
         const existing = sprite.getChildByLabel("bubble");
@@ -446,20 +489,25 @@ export default function GameCanvas({ room, username }: Props) {
         appRef.current?.ticker.add(tickFn);
       }
 
-      const startX = (MAP_COLS * TILE_SIZE) / 2;
-      const startY = (MAP_ROWS * TILE_SIZE) / 2;
+      // Position initiale = position sauvegardée renvoyée par le serveur (sinon centre)
+      const selfState = room.players.get(room.id);
+      const startX = selfState?.x ?? (MAP_COLS * TILE_SIZE) / 2;
+      const startY = selfState?.y ?? (MAP_ROWS * TILE_SIZE) / 2;
 
       const localSprite = createPlayerSprite(room.id, username, true);
       localSprite.x = startX;
       localSprite.y = startY;
+      const localParts = playerParts.get(room.id)!;
 
       room.players.forEach((p) => {
+        if (p.id === room.id) return; // ne pas recréer le joueur local
         const s = createPlayerSprite(p.id, p.username, false);
         s.x = p.x; s.y = p.y;
       });
 
       room.onMessage((msg) => {
         if (msg.type === "player_join") {
+          if (msg.player.id === room.id) return;
           const s = createPlayerSprite(msg.player.id, msg.player.username, false);
           s.x = msg.player.x; s.y = msg.player.y;
         }
@@ -470,6 +518,8 @@ export default function GameCanvas({ room, username }: Props) {
         if (msg.type === "player_move") {
           const s = playerSprites.get(msg.id);
           if (s) { s.x = msg.x; s.y = msg.y; }
+          const p = playerParts.get(msg.id);
+          if (p) p.moving = msg.moving ?? true;
         }
         if (msg.type === "chat") {
           const s = msg.id === room.id ? localSprite : playerSprites.get(msg.id);
@@ -540,6 +590,7 @@ export default function GameCanvas({ room, username }: Props) {
 
       let localX = startX;
       let localY = startY;
+      let wasMoving = false;
 
       app.ticker.add(() => {
         let dx = 0, dy = 0, direction = "down";
@@ -551,13 +602,20 @@ export default function GameCanvas({ room, username }: Props) {
         const speed = isDown("shift") ? RUN_SPEED : WALK_SPEED;
         dx *= speed; dy *= speed;
 
-        if (dx !== 0 || dy !== 0) {
+        const isMoving = dx !== 0 || dy !== 0;
+        localParts.moving = isMoving;
+
+        if (isMoving) {
           localX = Math.max(0, Math.min(MAP_COLS * TILE_SIZE - 20, localX + dx));
           localY = Math.max(0, Math.min(MAP_ROWS * TILE_SIZE - 24, localY + dy));
           localSprite.x = localX;
           localSprite.y = localY;
           room.send("move", { x: localX, y: localY, direction, moving: true });
+        } else if (wasMoving) {
+          // envoie une seule fois le stop
+          room.send("move", { x: localX, y: localY, direction, moving: false });
         }
+        wasMoving = isMoving;
 
         const vw = app!.screen.width;
         const vh = app!.screen.height;
