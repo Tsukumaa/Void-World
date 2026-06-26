@@ -22,29 +22,31 @@ export function useWorldRoom(username: string, roomName: string = "main") {
   const [room, setRoom] = useState<WorldRoom | null>(null);
   const [connected, setConnected] = useState(false);
   const [onlinePlayers, setOnlinePlayers] = useState<Map<string, PlayerState>>(new Map());
-  const wsRef = useRef<WebSocket | null>(null);
   const handlersRef = useRef<((msg: any) => void)[]>([]);
-  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const stopped = useRef(false);
 
   useEffect(() => {
     if (!username) return;
-    stopped.current = false;
+    // Flag/timers LOCAUX à cette exécution d'effet (= à cette room).
+    // Évite qu'une ancienne connexion (ex: maison) reconnecte après changement de room.
+    let active = true;
+    let currentWs: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let pingTimer: ReturnType<typeof setInterval> | null = null;
+
     setConnected(false);
-    // les handlers sont propres à une connexion/room
     handlersRef.current = [];
 
     function connect() {
-      if (stopped.current) return;
+      if (!active) return;
 
       const url = `${WS_URL}?room=${encodeURIComponent(roomName)}`;
       const ws = new WebSocket(url);
-      wsRef.current = ws;
+      currentWs = ws;
 
       const players = new Map<string, PlayerState>();
       let localId = "";
 
-      function syncPlayers() { setOnlinePlayers(new Map(players)); }
+      function syncPlayers() { if (active) setOnlinePlayers(new Map(players)); }
 
       const roomObj: WorldRoom = {
         get id() { return localId; },
@@ -56,11 +58,28 @@ export function useWorldRoom(username: string, roomName: string = "main") {
       };
 
       ws.onopen = () => {
-        ws.send(JSON.stringify({ type: "join", username }));
+        if (!active) { try { ws.close(1000); } catch {} return; }
+        // rejoint à la dernière position connue (continuité après reconnexion)
+        let pos: { x: number; y: number } | null = null;
+        try {
+          const raw = localStorage.getItem(`void_pos_${roomName}`);
+          if (raw) pos = JSON.parse(raw);
+        } catch {}
+        ws.send(JSON.stringify({ type: "join", username, x: pos?.x, y: pos?.y }));
+
+        // keepalive : évite la coupure des connexions inactives (auto-réponse serveur)
+        if (pingTimer) clearInterval(pingTimer);
+        pingTimer = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) ws.send("ping");
+        }, 25000);
       };
 
       ws.onmessage = (event) => {
-        const msg = JSON.parse(event.data);
+        if (!active) return;
+        // ignore les réponses keepalive non-JSON ("pong")
+        if (typeof event.data === "string" && event.data[0] !== "{") return;
+        let msg: any;
+        try { msg = JSON.parse(event.data); } catch { return; }
 
         if (msg.type === "init") {
           localId = msg.id;
@@ -85,22 +104,21 @@ export function useWorldRoom(username: string, roomName: string = "main") {
       ws.onerror = console.error;
 
       ws.onclose = (e) => {
-        if (stopped.current) return;
+        if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
+        if (!active) return;               // cette room n'est plus active → on abandonne
         setConnected(false);
-        // Fermeture volontaire (ex: éjecté par le serveur car doublon de pseudo)
-        // → ne pas reconnecter, sinon boucle infinie de reconnexion
-        if (e.code === 1000) return;
-        // reconnexion automatique après 3 secondes (coupure réseau / serveur endormi)
-        reconnectTimer.current = setTimeout(connect, 3000);
+        if (e.code === 1000) return;       // fermeture volontaire → pas de reconnexion
+        reconnectTimer = setTimeout(connect, 3000);
       };
     }
 
     connect();
 
     return () => {
-      stopped.current = true;
-      if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
-      wsRef.current?.close();
+      active = false;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (pingTimer) clearInterval(pingTimer);
+      try { currentWs?.close(1000); } catch {}
     };
   }, [username, roomName]);
 

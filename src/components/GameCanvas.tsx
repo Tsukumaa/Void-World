@@ -611,9 +611,12 @@ export default function GameCanvas({ room, username }: Props) {
           localSprite.x = localX;
           localSprite.y = localY;
           room.send("move", { x: localX, y: localY, direction, moving: true });
+          // mémorise la position pour rejoindre au même endroit après reconnexion
+          try { localStorage.setItem("void_pos_main", JSON.stringify({ x: localX, y: localY })); } catch {}
         } else if (wasMoving) {
           // envoie une seule fois le stop
           room.send("move", { x: localX, y: localY, direction, moving: false });
+          try { localStorage.setItem("void_pos_main", JSON.stringify({ x: localX, y: localY })); } catch {}
         }
         wasMoving = isMoving;
 
