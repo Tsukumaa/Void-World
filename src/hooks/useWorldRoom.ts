@@ -84,10 +84,13 @@ export function useWorldRoom(username: string, roomName: string = "main") {
 
       ws.onerror = console.error;
 
-      ws.onclose = () => {
+      ws.onclose = (e) => {
         if (stopped.current) return;
         setConnected(false);
-        // reconnexion automatique après 3 secondes
+        // Fermeture volontaire (ex: éjecté par le serveur car doublon de pseudo)
+        // → ne pas reconnecter, sinon boucle infinie de reconnexion
+        if (e.code === 1000) return;
+        // reconnexion automatique après 3 secondes (coupure réseau / serveur endormi)
         reconnectTimer.current = setTimeout(connect, 3000);
       };
     }
