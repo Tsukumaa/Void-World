@@ -5,9 +5,12 @@ import { signIn, signOut, useSession } from "next-auth/react";
 import dynamic from "next/dynamic";
 import { useWorldRoom } from "@/hooks/useWorldRoom";
 import SocialPanel from "@/components/SocialPanel";
+import CharacterPicker from "@/components/CharacterPicker";
+import { loadCharConfig, saveCharConfig, type CharConfig } from "@/lib/charConfig";
 
-const GameCanvas = dynamic(() => import("@/components/GameCanvas"), { ssr: false });
+const GameCanvas  = dynamic(() => import("@/components/GameCanvas"),  { ssr: false });
 const HouseCanvas = dynamic(() => import("@/components/HouseCanvas"), { ssr: false });
+const BiomeCanvas = dynamic(() => import("@/components/BiomeCanvas"), { ssr: false });
 
 export default function Home() {
   const { data: session, status } = useSession();
@@ -16,12 +19,15 @@ export default function Home() {
   const [started, setStarted] = useState(false);
   // "main" = monde, "house:<pseudo>" = maison instanciée
   const [activeRoom, setActiveRoom] = useState("main");
+  const [charCfg, setCharCfg] = useState<CharConfig | null>(null);
+  const [showPicker, setShowPicker] = useState(false);
   const { room, connected, onlinePlayers } = useWorldRoom(started ? username : "", activeRoom);
 
   useEffect(() => {
     if (session) {
       const saved = localStorage.getItem("void_username");
       if (saved) setUsername(saved);
+      setCharCfg(loadCharConfig());
     }
   }, [session]);
 
@@ -69,6 +75,14 @@ export default function Home() {
   if (!username) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-gray-900">
+        {showPicker && charCfg && (
+          <CharacterPicker
+            initial={charCfg}
+            onSave={(c) => { setCharCfg(c); setShowPicker(false); }}
+            onCancel={() => setShowPicker(false)}
+            title="Personnalise ton personnage"
+          />
+        )}
         <div className="flex flex-col gap-4 items-center">
           <h1 className="text-4xl font-bold text-white">Void World</h1>
           <p className="text-gray-400">Choisis ton pseudo</p>
@@ -86,6 +100,12 @@ export default function Home() {
             }}
           />
           <button
+            className="px-6 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded font-semibold"
+            onClick={() => setShowPicker(true)}
+          >
+            🎨 Personnaliser le perso
+          </button>
+          <button
             className="px-6 py-2 bg-green-600 hover:bg-green-500 text-white rounded font-semibold disabled:opacity-40"
             disabled={usernameInput.length < 3}
             onClick={() => {
@@ -93,7 +113,7 @@ export default function Home() {
               setUsername(usernameInput);
             }}
           >
-            Confirmer
+            Jouer
           </button>
           <button className="text-gray-500 hover:text-gray-300 text-sm" onClick={() => signOut()}>
             Se déconnecter
@@ -140,15 +160,42 @@ export default function Home() {
   }
 
   const isHouse = activeRoom.startsWith("house:");
+  const isBiome = activeRoom.startsWith("biome:");
   const ownerName = isHouse ? activeRoom.slice("house:".length) : username;
+  const biomeName = isBiome ? activeRoom.slice("biome:".length) : "";
 
   if (isHouse) {
     return (
-      <HouseCanvas
+      <>
+        {showPicker && charCfg && (
+          <CharacterPicker
+            initial={charCfg}
+            onSave={(c) => { setCharCfg(c); setShowPicker(false); setActiveRoom("main"); setTimeout(() => setActiveRoom(`house:${username}`), 50); }}
+            onCancel={() => setShowPicker(false)}
+            title="Changer de personnage"
+          />
+        )}
+        <HouseCanvas
+          key={activeRoom}
+          room={room}
+          username={username}
+          ownerName={ownerName}
+          charCfg={charCfg ?? undefined}
+          onExit={() => setActiveRoom("main")}
+          onChangeChar={() => setShowPicker(true)}
+        />
+      </>
+    );
+  }
+
+  if (isBiome) {
+    return (
+      <BiomeCanvas
         key={activeRoom}
         room={room}
         username={username}
-        ownerName={ownerName}
+        biome={biomeName as any}
+        charCfg={charCfg ?? undefined}
         onExit={() => setActiveRoom("main")}
       />
     );
@@ -156,7 +203,13 @@ export default function Home() {
 
   return (
     <>
-      <GameCanvas key={activeRoom} room={room} username={username} />
+      <GameCanvas
+        key={activeRoom}
+        room={room}
+        username={username}
+        charCfg={charCfg ?? loadCharConfig()}
+        onEnterBiome={(b) => setActiveRoom(`biome:${b}`)}
+      />
       <SocialPanel room={room} username={username} onlinePlayers={onlinePlayers} />
       <button
         onClick={() => setActiveRoom(`house:${username}`)}

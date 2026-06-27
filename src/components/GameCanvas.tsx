@@ -1,19 +1,25 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { Application, Graphics, Text, TextStyle, Container, Assets, Texture, Rectangle, Sprite } from "pixi.js";
+import { Application, Graphics, Text, TextStyle, Container } from "pixi.js";
+import { drawPixelCharBody, drawPixelLeg, LEG_L_X, LEG_R_X, LEG_Y, CHAR_ABOVE } from "@/lib/pixelChar";
+import { type CharConfig, loadCharConfig } from "@/lib/charConfig";
+import { loadDoll, tickDoll, unloadDollTextures, type PlayerDoll, type Dir as DollDir } from "@/lib/charSprite";
 import { WorldRoom } from "@/hooks/useWorldRoom";
 import {
   drawTree as pxTree,
-  drawCactus as pxCactus,
-  drawPalmTree as pxPalm,
-  drawSnowTree as pxSnowTree,
-  drawSwampTree as pxSwampTree,
   drawRock as pxRock,
-  drawMountainRock as pxMountainRock,
   drawHouse as pxHouse,
   getHouseHitbox,
-  drawMountain as pxMountain,
+  drawFountain,
+  animateFountain,
+  drawLamp,
+  drawBench,
+  drawStatue,
+  drawPortalFull as drawPortal,
+  animatePortal,
+  BIOME_COLORS as PORTAL_BIOME_COLORS,
+  type BiomeKey,
   decorBush,
   decorFlowers,
   decorGrassTuft,
@@ -24,116 +30,88 @@ import {
 interface Props {
   room: WorldRoom;
   username: string;
+  charCfg: CharConfig;
+  onEnterBiome?: (biome: BiomeKey) => void;
 }
 
-const TILE_SIZE = 32;
-const MAP_COLS  = 150;
-const MAP_ROWS  = 120;
+const TILE_SIZE  = 32;
+const MAP_COLS   = 80;
+const MAP_ROWS   = 60;
 const WALK_SPEED = 0.8;
 const RUN_SPEED  = 1.4;
 
-// Palette
+// Centre du hub
+const HUB_CX = Math.floor(MAP_COLS / 2); // 40
+const HUB_CY = Math.floor(MAP_ROWS / 2); // 30
+
 const C = {
-  grass:      0x7ec87a,
-  grassDark:  0x6db86a,
-  dirt:       0xc9a86c,
-  dirtDark:   0xb8966a,
-  treeTrunk:  0x8b5e3c,
-  treeTop:    0x4a9e4f,
-  treeTop2:   0x3d8f42,
-  rock:       0x9e9e9e,
-  rockDark:   0x7a7a7a,
-  housWall:   0xf5e6c8,
-  housWall2:  0xe8d5b0,
-  housRoof:   0xc0392b,
-  housRoof2:  0xa93226,
-  housDoor:   0x8b5e3c,
-  housWin:    0x87ceeb,
-  path:       0xc9a86c,
-  shadow:     0x000000,
-  // Biomes
-  forest:     0x4a8c3f,
-  forestDark: 0x3d7a33,
-  snow:       0xe8f0f8,
-  snowDark:   0xd0dded,
-  desert:     0xe8c97a,
-  desertDark: 0xd4b865,
-  beach:      0xf0e08a,
-  beachDark:  0xdecf70,
-  water:      0x4a90d9,
-  waterDark:  0x3a80c9,
-  swamp:      0x5a7a40,
-  swampDark:  0x4a6a32,
-  mountain:   0xa0a878,
-  mountainDk: 0x888f60,
+  grass:     0x7ec87a,
+  grassDark: 0x6db86a,
+  dirt:      0xc9a86c,
+  dirtDark:  0xb8966a,
+  stone:     0xb8a888,
+  stoneDark: 0xa09878,
+  water:     0x4a90d9,
+  waterDark: 0x3a80c9,
 };
 
-// Biomes : village, forest, snow, desert, beach, swamp, mountain
-type Biome = "village" | "forest" | "snow" | "desert" | "beach" | "swamp" | "mountain";
+type Biome = "village";
+function getBiome(_col: number, _row: number): Biome { return "village"; }
 
-function getBiome(col: number, row: number): Biome {
-  const cx = MAP_COLS / 2, cy = MAP_ROWS / 2;
-  const dx = col - cx, dy = row - cy;
-  // Centre = village
-  if (Math.abs(dx) < 30 && Math.abs(dy) < 25) return "village";
-  // Quadrants
-  if (dx < -30 && dy < -20) return "forest";    // NW
-  if (dx >  30 && dy < -20) return "snow";       // NE
-  if (dx < -30 && dy >  20) return "desert";     // SW
-  if (dx >  30 && dy >  20) return "beach";      // SE
-  // Bandes
-  if (dy < -20) return "mountain";               // bande nord
-  if (dy >  20) return "swamp";                  // bande sud
-  return "village";
-}
-
-const BIOME_COLORS: Record<Biome, [number, number]> = {
-  village:  [C.grass,    C.grassDark],
-  forest:   [C.forest,   C.forestDark],
-  snow:     [C.snow,     C.snowDark],
-  desert:   [C.desert,   C.desertDark],
-  beach:    [C.beach,    C.beachDark],
-  swamp:    [C.swamp,    C.swampDark],
-  mountain: [C.mountain, C.mountainDk],
+const TEX = {
+  village: { shades: [0x7ec87a, 0x77c073, 0x88d084], dark: 0x63ab60, tuft: 0x9bdc95, flower: [0xffffff, 0xf5d23b, 0xe96b9c, 0xb98cf0] },
 };
 
-// Map : 0=sol, 1=chemin, 2=eau
+// Map : 0=herbe, 1=chemin terre, 2=eau, 3=dalle pierre (plaza)
 function generateMap(): number[][] {
-  const map: number[][] = [];
-  const midR = Math.floor(MAP_ROWS / 2);
-  const midC = Math.floor(MAP_COLS / 2);
-  for (let r = 0; r < MAP_ROWS; r++) {
-    map[r] = [];
-    for (let c = 0; c < MAP_COLS; c++) {
-      const biome = getBiome(c, r);
-      // lac au milieu de la plage (SE)
-      const inBeachLake = biome === "beach" && Math.hypot(c - (MAP_COLS * 0.83), r - (MAP_ROWS * 0.79)) < 10;
-      // marais = eau par endroits
-      const inSwampWater = biome === "swamp" && ((c + r * 3) % 11 < 2);
-      if (inBeachLake || inSwampWater) { map[r][c] = 2; continue; }
-      map[r][c] = (r === midR || c === midC) ? 1 : 0;
+  const map: number[][] = Array.from({ length: MAP_ROWS }, () => new Array(MAP_COLS).fill(0));
+
+  // --- Plaza centrale (dalles) ---
+  for (let r = HUB_CY - 5; r <= HUB_CY + 5; r++)
+    for (let c = HUB_CX - 5; c <= HUB_CX + 5; c++)
+      map[r][c] = 3;
+
+
+  // Helper : tracer un chemin de (r0,c0) à (r1,c1) largeur w
+  function path(r0: number, c0: number, r1: number, c1: number, w = 2) {
+    const steps = Math.max(Math.abs(r1 - r0), Math.abs(c1 - c0));
+    for (let i = 0; i <= steps; i++) {
+      const r = Math.round(r0 + (r1 - r0) * i / steps);
+      const cc = Math.round(c0 + (c1 - c0) * i / steps);
+      for (let dr = -Math.floor(w / 2); dr <= Math.floor(w / 2); dr++)
+        for (let dc = -Math.floor(w / 2); dc <= Math.floor(w / 2); dc++) {
+          const tr = r + dr, tc = cc + dc;
+          if (tr >= 0 && tr < MAP_ROWS && tc >= 0 && tc < MAP_COLS && map[tr][tc] !== 2)
+            map[tr][tc] = 1;
+        }
     }
   }
+
+  // 4 grandes allées depuis la plaza vers chaque portail
+  path(HUB_CY, HUB_CX - 5, HUB_CY, 2,          3); // W → portail Forêt
+  path(HUB_CY, HUB_CX + 5, HUB_CY, MAP_COLS-3,  3); // E → portail Neige
+  path(HUB_CY - 5, HUB_CX, 2,          HUB_CX,  3); // N → portail Montagne
+  path(HUB_CY + 5, HUB_CX, MAP_ROWS-3, HUB_CX,  3); // S → portail Marécage
+
+  // Allées diagonales vers les 2 autres portails (NW Désert, SE Plage)
+  path(HUB_CY - 4, HUB_CX - 4, 3,          3,          2); // NW
+  path(HUB_CY + 4, HUB_CX + 4, MAP_ROWS-4, MAP_COLS-4, 2); // SE
+
+  // Petits chemins vers les groupes de maisons
+  path(HUB_CY - 3, HUB_CX + 6, HUB_CY - 8, HUB_CX + 14, 2);
+  path(HUB_CY + 3, HUB_CX - 6, HUB_CY + 8, HUB_CX - 14, 2);
+  path(HUB_CY - 3, HUB_CX - 6, HUB_CY - 8, HUB_CX - 14, 2);
+  path(HUB_CY + 3, HUB_CX + 6, HUB_CY + 8, HUB_CX + 14, 2);
+
   return map;
 }
 
-// Bruit déterministe 0..1 (stable par tuile)
+// Bruit déterministe 0..1
 function rnd(c: number, r: number, salt: number): number {
   let h = (c * 374761393 + r * 668265263 + salt * 2246822519) >>> 0;
   h = ((h ^ (h >>> 13)) * 1274126177) >>> 0;
   return (h >>> 0) / 4294967295;
 }
-
-// Texture par biome : nuances de base, ombre (taches), touffe d'herbe, fleurs
-const TEX: Record<Biome, { shades: number[]; dark: number; tuft?: number; flower?: number[] }> = {
-  village:  { shades: [0x7ec87a, 0x77c073, 0x88d084], dark: 0x63ab60, tuft: 0x9bdc95, flower: [0xffffff, 0xf5d23b, 0xe96b9c, 0xb98cf0] },
-  forest:   { shades: [0x4a8c3f, 0x437f39, 0x539646], dark: 0x376b30, tuft: 0x66a85a, flower: [0xf5e84a, 0xffffff] },
-  swamp:    { shades: [0x5a7a40, 0x527238, 0x63824a], dark: 0x42602e, tuft: 0x6f9050 },
-  snow:     { shades: [0xe8f0f8, 0xe1eaf4, 0xeff5fc], dark: 0xd2dfee, flower: [0xffffff, 0xc5dcf2] },
-  desert:   { shades: [0xe8c97a, 0xe1c06f, 0xefd488], dark: 0xccab5c },
-  beach:    { shades: [0xf0e08a, 0xe9d77f, 0xf6e99b], dark: 0xd7c46b },
-  mountain: { shades: [0xa0a878, 0x98a06f, 0xaab083], dark: 0x848c5e },
-};
 
 function drawTile(g: Graphics, x: number, y: number, type: number, col: number, row: number) {
   // Eau : base + ondulations
@@ -202,47 +180,61 @@ function drawTile(g: Graphics, x: number, y: number, type: number, col: number, 
 }
 
 
-// Décor en pixel art (voir src/lib/pixelArt.ts). seed = variété (forme/couleur/taille)
-function drawCactus(world: Container, cx: number, cy: number, s: number)      { pxCactus(world, cx, cy, s); }
-function drawPalmTree(world: Container, cx: number, cy: number, s: number)    { pxPalm(world, cx, cy, s); }
-function drawSnowTree(world: Container, cx: number, cy: number, s: number)    { pxSnowTree(world, cx, cy, s); }
-function drawSwampTree(world: Container, cx: number, cy: number, s: number)   { pxSwampTree(world, cx, cy, s); }
-function drawMountainRock(world: Container, cx: number, cy: number, s: number){ pxMountainRock(world, cx, cy, s); }
-function drawTree(world: Container, cx: number, cy: number, s: number)        { pxTree(world, cx, cy, s); }
-function drawRock(world: Container, cx: number, cy: number, s: number)        { pxRock(world, cx, cy, s); }
+function drawTree(world: Container, cx: number, cy: number, s: number)  { pxTree(world, cx, cy, s); }
+function drawRock(world: Container, cx: number, cy: number, s: number)  { pxRock(world, cx, cy, s); }
 function drawHouse(world: Container, col: number, row: number, _s: number, seed: number) { pxHouse(world, col, row, TILE_SIZE, seed); }
 
-const PLACED_TREES = [
+// Arbres — bordure + bosquets autour des allées du hub (80×60)
+const PLACED_TREES: [number, number][] = [
   // Bordure nord
-  [2,2],[5,1],[9,3],[13,2],[17,1],[22,3],[27,2],[32,1],[37,3],[42,2],[47,1],[52,3],[57,2],[62,1],[67,3],[72,2],[77,1],[82,3],[87,2],[92,1],[97,3],[102,2],[107,1],[112,3],[117,2],[122,1],[127,3],[132,2],[137,1],[142,3],[147,2],
+  [1,1],[4,0],[7,1],[11,0],[14,1],[18,0],[22,1],[26,0],[30,1],[34,0],[38,1],[42,0],[46,1],[50,0],[54,1],[58,0],[62,1],[66,0],[70,1],[74,0],[78,1],
   // Bordure sud
-  [2,117],[6,118],[11,116],[16,118],[21,117],[26,116],[31,118],[36,117],[41,116],[46,118],[51,117],[56,116],[61,118],[66,117],[71,116],[76,118],[81,117],[86,116],[91,118],[96,117],[101,116],[106,118],[111,117],[116,116],[121,118],[126,117],[131,116],[136,118],[141,117],[146,116],
+  [1,58],[4,59],[8,58],[12,59],[16,58],[20,59],[24,58],[28,59],[32,58],[36,59],[40,58],[44,59],[48,58],[52,59],[56,58],[60,59],[64,58],[68,59],[72,58],[76,59],
   // Bordure ouest
-  [1,7],[2,12],[1,17],[2,22],[1,27],[2,32],[1,37],[2,42],[1,47],[2,52],[1,57],[2,62],[1,67],[2,72],[1,77],[2,82],[1,87],[2,92],[1,97],[2,102],[1,107],[2,112],
+  [0,4],[1,8],[0,13],[1,18],[0,23],[1,28],[0,33],[1,38],[0,43],[1,48],[0,53],
   // Bordure est
-  [147,7],[148,12],[147,17],[148,22],[147,27],[148,32],[147,37],[148,42],[147,47],[148,52],[147,57],[148,62],[147,67],[148,72],[147,77],[148,82],[147,87],[148,92],[147,97],[148,102],[147,107],[148,112],
-  // Bosquets intérieurs
-  [10,10],[14,8],[18,12],[8,15],[25,8],[29,10],[33,7],[22,15],[38,10],[43,8],[50,12],[55,9],[60,11],[65,8],[70,10],[75,9],[80,12],[85,8],[90,11],[95,9],[100,12],[105,8],[110,11],[115,9],[120,12],[125,8],[130,11],[135,9],[140,12],[145,8],
-  [10,110],[14,112],[18,108],[8,105],[25,112],[29,110],[33,107],[38,110],[43,112],[50,108],[55,111],[60,109],[65,112],[70,110],[75,109],[80,108],[85,111],[90,109],[95,112],[100,108],[105,111],[110,109],[115,112],[120,108],[125,111],[130,109],[135,112],[140,108],[145,111],
-  // Clusters milieu
-  [20,45],[22,47],[18,48],[15,43],[25,50],[30,42],[35,48],[40,45],[45,50],[50,43],[55,47],[60,44],[65,48],[70,45],[75,50],[80,43],[85,47],[90,44],[95,48],[100,45],[105,50],[110,43],[115,47],[120,44],[125,48],[130,45],[135,50],[140,43],
-  [20,75],[22,73],[18,72],[15,77],[25,70],[30,78],[35,72],[40,75],[45,70],[50,77],[55,73],[60,76],[65,72],[70,75],[75,70],[80,77],[85,73],[90,76],[95,72],[100,75],[105,70],[110,77],[115,73],[120,76],[125,72],[130,75],[135,70],[140,77],
+  [78,4],[79,8],[78,13],[79,18],[78,23],[79,28],[78,33],[79,38],[78,43],[79,48],[78,53],
+  // Bosquets NW (quartier résidentiel)
+  [8,8],[10,6],[13,9],[7,11],[11,12],[15,7],[9,14],
+  // Bosquets NE
+  [65,8],[68,6],[71,9],[67,11],[70,13],[73,7],[66,14],
+  // Bosquets SW
+  [8,46],[10,48],[13,51],[7,49],[11,53],[15,47],[9,52],
+  // Bosquets SE
+  [65,46],[68,48],[71,51],[67,49],[70,53],[73,47],[66,52],
+  // Arbres le long des allées N et S
+  [37,10],[43,10],[37,50],[43,50],
+  [37,8],[43,8],[37,52],[43,52],
+  // Petits bosquets autour de la plaza
+  [28,22],[30,20],[28,24],[30,26],[50,22],[52,20],[50,24],[52,26],
+  [28,38],[30,36],[28,40],[30,42],[50,38],[52,36],[50,40],[52,42],
 ];
 
-// Rochers générés procéduralement dans le biome montagne (voir boucle dans useEffect)
-
-const PLACED_HOUSES = [
-  // Village centre (biome "village" garanti : |dx|<30, |dy|<25 depuis centre 75,60)
-  [60,48],[72,48],[84,48],
-  [60,60],[72,60],[84,60],
-  [60,72],[72,72],[84,72],
+const PLACED_ROCKS: [number, number][] = [
+  [5,25],[6,35],[74,25],[73,35],[5,28],[74,32],
 ];
 
-export default function GameCanvas({ room, username }: Props) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const chatInputRef = useRef<HTMLInputElement>(null);
-  const chatOpenRef  = useRef(false);
-  const appRef       = useRef<Application | null>(null);
+// Maisons groupées dans 4 quartiers autour du hub
+const PLACED_HOUSES: [number, number][] = [
+  // Quartier NW
+  [8,10],[14,10],[8,16],
+  // Quartier NE
+  [56,10],[62,10],[62,16],
+  // Quartier SW
+  [8,42],[14,42],[8,48],
+  // Quartier SE
+  [56,42],[62,42],[62,48],
+];
+
+export default function GameCanvas({ room, username, charCfg, onEnterBiome }: Props) {
+  const containerRef    = useRef<HTMLDivElement>(null);
+  const chatInputRef    = useRef<HTMLInputElement>(null);
+  const chatOpenRef     = useRef(false);
+  const appRef          = useRef<Application | null>(null);
+  const onEnterBiomeRef = useRef(onEnterBiome);
+  const fadeRef         = useRef<{ active: boolean; alpha: number; biome: BiomeKey | null }>({ active: false, alpha: 0, biome: null });
+
+  useEffect(() => { onEnterBiomeRef.current = onEnterBiome; }, [onEnterBiome]);
 
   useEffect(() => {
     let app: Application | null = null;
@@ -280,22 +272,11 @@ export default function GameCanvas({ room, username }: Props) {
       world.sortableChildren = true;
       app.stage.addChild(world);
 
-      // ----- Chargement du pack Sprout Lands -----
-      const charTex = await Assets.load("/tiles/sl_char.png") as Texture;
-      if (destroyed) { app.destroy(true); return; }
-      charTex.source.scaleMode = "nearest";
+      // Overlay de fondu (toujours par-dessus tout)
+      const fadeOverlay = new Graphics();
+      app.stage.addChild(fadeOverlay);
 
-      // Frames du personnage : 4 directions × 4 frames (idle + 3 walk)
       type Dir = "down" | "up" | "right" | "left";
-      const CHAR_SCALE = TILE_SIZE / 8; // 4× → sprite 56×64px
-      const mkFrames = (y: number, x0: number, w: number) =>
-        [0, 1, 2, 3].map(i => new Texture({ source: charTex.source, frame: new Rectangle(x0 + i * 48, y, w, 16) }));
-      const CHAR_FRAMES: Record<Dir, Texture[]> = {
-        down:  mkFrames(16,  17, 14),
-        up:    mkFrames(64,  17, 14),
-        right: mkFrames(160, 19, 10),
-        left:  mkFrames(112, 19, 10),
-      };
 
       const SCALE = TILE_SIZE / 16; // art 16px -> tuiles 32px
       const mapData = generateMap();
@@ -323,23 +304,26 @@ export default function GameCanvas({ room, username }: Props) {
         hitboxes.push({ kind: "rect", ...hb });
       }
 
-      // Arbres pixel art selon biome — zIndex = baseY pour tri de profondeur
+      // Arbres hub — tous village
       for (const [c, r] of PLACED_TREES) {
         const cx   = c * TILE_SIZE + TILE_SIZE / 2;
         const cy   = r * TILE_SIZE + TILE_SIZE;
         const seed = (c * 131 + r * 73) >>> 0;
-        const biome = getBiome(c, r);
-        if      (biome === "snow")     drawSnowTree(world, cx, cy, seed);
-        else if (biome === "desert")   drawCactus(world, cx, cy, seed);
-        else if (biome === "beach")    drawPalmTree(world, cx, cy, seed);
-        else if (biome === "swamp")    drawSwampTree(world, cx, cy, seed);
-        else if (biome === "mountain") drawMountainRock(world, cx, cy, seed);
-        else                           drawTree(world, cx, cy, seed);
+        drawTree(world, cx, cy, seed);
         world.children[world.children.length - 1].zIndex = cy;
         hitboxes.push({ kind: "circle", cx, cy: cy - 4, r: TILE_SIZE * 0.55 });
       }
 
-      // Décorations de sol : buissons, fleurs, touffes d'herbe
+      // Rochers décoratifs
+      for (const [c, r] of PLACED_ROCKS) {
+        const cx = c * TILE_SIZE + TILE_SIZE / 2, cy = r * TILE_SIZE + TILE_SIZE;
+        const seed = (c * 197 + r * 41) >>> 0;
+        drawRock(world, cx, cy, seed);
+        world.children[world.children.length - 1].zIndex = cy;
+        hitboxes.push({ kind: "circle", cx, cy: cy - 4, r: TILE_SIZE * 0.4 });
+      }
+
+      // Décorations de sol : buissons, fleurs, touffes
       const bushG = new Graphics();
       bushG.zIndex = 1;
       world.addChild(bushG);
@@ -347,91 +331,158 @@ export default function GameCanvas({ room, username }: Props) {
         for (let c = 0; c < MAP_COLS; c++) {
           if (mapData[r][c] !== 0) continue;
           const seed = (c * 131 + r * 97) >>> 0;
-          const biome = getBiome(c, r);
           const roll = rnd(c, r, 51);
-          if (roll < 0.04) {
-            // buisson
-            const px = c * TILE_SIZE + 6 + Math.floor(rnd(c, r, 55) * 20);
-            const py = r * TILE_SIZE + 22 + Math.floor(rnd(c, r, 57) * 8);
-            decorBush(bushG, px, py, seed);
-          } else if (roll < 0.10 && (biome === "village" || biome === "forest")) {
-            // fleurs (village et forêt seulement)
-            const px = c * TILE_SIZE + 4 + Math.floor(rnd(c, r, 60) * 24);
-            const py = r * TILE_SIZE + 8 + Math.floor(rnd(c, r, 62) * 16);
-            decorFlowers(bushG, px, py, seed);
-          } else if (roll < 0.14 && biome !== "desert" && biome !== "beach") {
-            // touffe d'herbe
-            const px = c * TILE_SIZE + 4 + Math.floor(rnd(c, r, 70) * 24);
-            const py = r * TILE_SIZE + 10 + Math.floor(rnd(c, r, 72) * 14);
-            decorGrassTuft(bushG, px, py, seed);
+          if (roll < 0.03) {
+            decorBush(bushG, c * TILE_SIZE + 8 + Math.floor(rnd(c, r, 55) * 16), r * TILE_SIZE + 22 + Math.floor(rnd(c, r, 57) * 8), seed);
+          } else if (roll < 0.09) {
+            decorFlowers(bushG, c * TILE_SIZE + 4 + Math.floor(rnd(c, r, 60) * 24), r * TILE_SIZE + 8 + Math.floor(rnd(c, r, 62) * 16), seed);
+          } else if (roll < 0.13) {
+            decorGrassTuft(bushG, c * TILE_SIZE + 4 + Math.floor(rnd(c, r, 70) * 24), r * TILE_SIZE + 10 + Math.floor(rnd(c, r, 72) * 14), seed);
           }
         }
       }
 
-      // Rochers de montagne — procéduraux, uniquement dans le biome montagne
-      for (let r = 0; r < MAP_ROWS; r++) {
-        for (let c = 0; c < MAP_COLS; c++) {
-          if (mapData[r][c] !== 0) continue;
-          if (getBiome(c, r) !== "mountain") continue;
-          const roll1 = rnd(c, r, 80);
-          const roll2 = rnd(c, r, 81);
-          if (roll1 < 0.06 || (roll1 < 0.12 && roll2 < 0.4)) {
-            const seed = (c * 197 + r * 41) >>> 0;
-            const cx = c * TILE_SIZE + TILE_SIZE / 2 + Math.floor(rnd(c, r, 82) * 8 - 4);
-            const cy = r * TILE_SIZE + TILE_SIZE;
-            drawMountainRock(world, cx, cy, seed);
-            world.children[world.children.length - 1].zIndex = cy;
-            hitboxes.push({ kind: "circle", cx, cy: cy - 6, r: TILE_SIZE * 0.7 });
-          }
-        }
-      }
-
-      // Maisons pixel art — zIndex = pied de la façade (bas du mur avant)
+      // Maisons pixel art — 4 quartiers
       for (const [c, r] of PLACED_HOUSES) {
         const seed = (c * 37 + r * 53) >>> 0;
         drawHouse(world, c, r, TILE_SIZE, seed);
         world.children[world.children.length - 1].zIndex = (r + 1) * TILE_SIZE;
       }
 
-      // Joueurs
+      // --- Décorations de la plaza centrale ---
+      const plazaCX = HUB_CX * TILE_SIZE + TILE_SIZE / 2;
+      const plazaCY = HUB_CY * TILE_SIZE + TILE_SIZE / 2;
+
+      // Fontaine centrale
+      const fountainWater = drawFountain(world, plazaCX, plazaCY);
+      world.children[world.children.length - 2].zIndex = plazaCY - 1;
+      world.children[world.children.length - 1].zIndex = plazaCY;
+      hitboxes.push({ kind: "circle", cx: plazaCX, cy: plazaCY - 10, r: 52 });
+
+      // 4 lampadaires aux coins de la plaza
+      const lampOffsets: [number, number][] = [[-5,-5],[5,-5],[-5,5],[5,5]];
+      for (const [dc, dr] of lampOffsets) {
+        const lx = (HUB_CX + dc) * TILE_SIZE + TILE_SIZE / 2;
+        const ly = (HUB_CY + dr) * TILE_SIZE + TILE_SIZE;
+        drawLamp(world, lx, ly);
+        world.children[world.children.length - 1].zIndex = ly;
+        hitboxes.push({ kind: "circle", cx: lx, cy: ly - 4, r: 10 });
+      }
+
+      // Bancs le long des allées (horizontaux N/S de la plaza, verticaux E/W)
+      const benchDefs: [number, number, boolean][] = [
+        [HUB_CX - 9, HUB_CY - 2, true ],  // allée ouest, côté nord
+        [HUB_CX - 9, HUB_CY + 2, true ],  // allée ouest, côté sud
+        [HUB_CX + 9, HUB_CY - 2, true ],  // allée est, côté nord
+        [HUB_CX + 9, HUB_CY + 2, true ],  // allée est, côté sud
+        [HUB_CX - 2, HUB_CY - 8, false],  // allée nord, côté ouest
+        [HUB_CX + 2, HUB_CY - 8, false],  // allée nord, côté est
+        [HUB_CX - 2, HUB_CY + 8, false],  // allée sud, côté ouest
+        [HUB_CX + 2, HUB_CY + 8, false],  // allée sud, côté est
+      ];
+      for (const [bc, br, horiz] of benchDefs) {
+        const bx = bc * TILE_SIZE + TILE_SIZE / 2;
+        const by = br * TILE_SIZE + TILE_SIZE;
+        drawBench(world, bx, by, horiz);
+        world.children[world.children.length - 1].zIndex = by;
+        hitboxes.push({ kind: "circle", cx: bx, cy: by - 4, r: 14 });
+      }
+
+      // Urnes décoratives aux 4 coins de la plaza
+      const statueDefs: [number, number][] = [
+        [HUB_CX - 6, HUB_CY - 6],
+        [HUB_CX + 6, HUB_CY - 6],
+        [HUB_CX - 6, HUB_CY + 5],
+        [HUB_CX + 6, HUB_CY + 5],
+      ];
+      for (const [sc, sr] of statueDefs) {
+        const sx = sc * TILE_SIZE + TILE_SIZE / 2;
+        const sy = sr * TILE_SIZE + TILE_SIZE;
+        drawStatue(world, sx, sy);
+        world.children[world.children.length - 1].zIndex = sy;
+        hitboxes.push({ kind: "circle", cx: sx, cy: sy - 8, r: 16 });
+      }
+
+      // --- Portails de biomes — aux bords du hub ---
+      const PORTAL_DEFS: { biome: BiomeKey; col: number; row: number }[] = [
+        { biome: "forest",   col: 1,  row: 27 }, // W
+        { biome: "snow",     col: 75, row: 27 }, // E
+        { biome: "mountain", col: 37, row: 1  }, // N
+        { biome: "swamp",    col: 37, row: 55 }, // S
+        { biome: "desert",   col: 3,  row: 3  }, // NW
+        { biome: "beach",    col: 73, row: 53 }, // SE
+      ];
+
+      type PortalRef = { biome: BiomeKey; cx: number; cy: number; inner: import("pixi.js").Graphics };
+      const portals: PortalRef[] = [];
+
+      for (const { biome, col, row } of PORTAL_DEFS) {
+        const cx = col * TILE_SIZE + TILE_SIZE / 2;
+        const cy = row * TILE_SIZE + TILE_SIZE;
+        const { inner } = drawPortal(world, cx, cy, biome);
+        // zIndex = cy pour la profondeur
+        world.children[world.children.length - 2].zIndex = cy - 1; // outer
+        world.children[world.children.length - 1].zIndex = cy;     // inner
+        portals.push({ biome, cx, cy, inner });
+
+        // Label du biome au-dessus du portail
+        const lbl = new Text({
+          text: PORTAL_BIOME_COLORS[biome].label,
+          style: new TextStyle({ fontSize: 10, fill: 0xffffff, fontFamily: "monospace",
+            dropShadow: { color: 0x000000, blur: 3, distance: 1 } }),
+        });
+        lbl.x = cx - lbl.width / 2;
+        // Si proche du bord nord, mettre le label sous le portail, sinon au-dessus
+        const portalH = 17 * 3; // PORTAL_GRID height × scale
+        lbl.y = cy - portalH > 16 ? cy - portalH - 14 : cy + 8;
+        lbl.zIndex = cy + 1;
+        world.addChild(lbl);
+      }
+
+      // Tooltip de proximité portail
+      const portalTooltip = new Container();
+      portalTooltip.visible = false;
+      const ttBg = new Graphics();
+      ttBg.roundRect(0, 0, 120, 28, 5).fill({ color: 0x000000, alpha: 0.75 });
+      const ttText = new Text({ text: "", style: new TextStyle({ fontSize: 10, fill: 0xffffff, fontFamily: "monospace" }) });
+      ttText.x = 8; ttText.y = 7;
+      portalTooltip.addChild(ttBg, ttText);
+      app.stage.addChild(portalTooltip);
+
+      // Joueurs — paper doll Mana Seed
       const playerSprites = new Map<string, Container>();
-      const playerParts   = new Map<string, { sprite: Sprite; walkTime: number; moving: boolean; dir: Dir }>();
+      const playerDolls   = new Map<string, PlayerDoll>();
+      // Fallback pixel art pour les joueurs dont on ne connaît pas le perso
+      type PlayerAnim = { legL: Graphics; legR: Graphics; body: Graphics; walkTime: number; step: number };
+      const playerAnims = new Map<string, PlayerAnim>();
 
-      function createPlayerSprite(id: string, name: string) {
+      function createFallbackSprite(id: string, name: string, isLocal = false): Container {
         const container = new Container();
-
         const shadow = new Graphics();
-        shadow.ellipse(0, 2, 10, 4).fill({ color: 0x000000, alpha: 0.2 });
+        shadow.ellipse(0, 2, 12, 5).fill({ color: 0x000000, alpha: 0.22 });
         container.addChild(shadow);
-
-        const sprite = new Sprite(CHAR_FRAMES.down[0]);
-        sprite.anchor.set(0.5, 1);
-        sprite.scale.set(CHAR_SCALE);
-        container.addChild(sprite);
-
+        const body = new Graphics(); drawPixelCharBody(body, isLocal); container.addChild(body);
+        const legL = new Graphics(); drawPixelLeg(legL, isLocal, false); legL.x = LEG_L_X; legL.y = LEG_Y; container.addChild(legL);
+        const legR = new Graphics(); drawPixelLeg(legR, isLocal, true);  legR.x = LEG_R_X; legR.y = LEG_Y; container.addChild(legR);
         const label = new Text({ text: name, style: new TextStyle({ fontSize: 9, fill: 0xffffff, fontFamily: "monospace", dropShadow: { color: 0x000000, blur: 2, distance: 1 } }) });
-        label.x = -label.width / 2;
-        label.y = -CHAR_SCALE * 16 - 12;
+        label.x = -label.width / 2; label.y = -(CHAR_ABOVE + 4);
         container.addChild(label);
-
-        playerParts.set(id, { sprite, walkTime: 0, moving: false, dir: "down" });
+        playerAnims.set(id, { legL, legR, body, walkTime: 0, step: 0 });
         world.addChild(container);
         playerSprites.set(id, container);
         return container;
       }
 
-      // ticker global : animation + tri z des joueurs
+      // ticker global : animation portails + fontaine + walk cycle
+      let portalTime = 0;
       app.ticker.add((ticker) => {
-        playerParts.forEach((parts, id) => {
-          if (parts.moving) {
-            parts.walkTime += ticker.deltaMS;
-            const frame = Math.floor(parts.walkTime / 120) % 4;
-            parts.sprite.texture = CHAR_FRAMES[parts.dir][frame];
-          } else {
-            parts.walkTime = 0;
-            parts.sprite.texture = CHAR_FRAMES[parts.dir][0];
-          }
-          // mise à jour du zIndex pour la profondeur
+        portalTime += ticker.deltaMS;
+        animateFountain(fountainWater, plazaCX, plazaCY, portalTime);
+        for (const p of portals) animatePortal(p.inner, p.cx, p.cy, p.biome, portalTime);
+      });
+
+      app.ticker.add((ticker) => {
+        playerAnims.forEach((anim, id) => {
           const container = playerSprites.get(id);
           if (container) container.zIndex = container.y;
         });
@@ -473,44 +524,44 @@ export default function GameCanvas({ room, username }: Props) {
 
       // Position initiale = position sauvegardée renvoyée par le serveur (sinon centre)
       const selfState = room.players.get(room.id);
-      const startX = selfState?.x ?? (MAP_COLS * TILE_SIZE) / 2;
-      const startY = selfState?.y ?? (MAP_ROWS * TILE_SIZE) / 2;
+      const maxX = MAP_COLS * TILE_SIZE - 20;
+      const maxY = MAP_ROWS * TILE_SIZE - 24;
+      const rawX = selfState?.x ?? (MAP_COLS * TILE_SIZE) / 2;
+      const rawY = selfState?.y ?? (MAP_ROWS * TILE_SIZE) / 2;
+      const startX = Math.min(Math.max(rawX, 20), maxX);
+      const startY = Math.min(Math.max(rawY, 20), maxY);
 
-      const localSprite = createPlayerSprite(room.id, username);
-      localSprite.x = startX;
-      localSprite.y = startY;
-      const localParts = playerParts.get(room.id)!;
+      // Perso local — paper doll Mana Seed
+      const localDoll = await loadDoll(charCfg, username, true, world, app);
+      if (destroyed) { app.destroy(true); return; }
+      playerDolls.set(room.id, localDoll);
+      playerSprites.set(room.id, localDoll.container);
+      localDoll.container.x = startX;
+      localDoll.container.y = startY;
 
+      // Autres joueurs — pixel art fallback (on ne connaît pas leur config)
       room.players.forEach((p) => {
         if (p.id === room.id) return;
-        const s = createPlayerSprite(p.id, p.username);
+        const s = createFallbackSprite(p.id, p.username, false);
         s.x = p.x; s.y = p.y;
       });
 
       room.onMessage((msg) => {
         if (msg.type === "player_join") {
           if (msg.player.id === room.id) return;
-          const s = createPlayerSprite(msg.player.id, msg.player.username);
+          const s = createFallbackSprite(msg.player.id, msg.player.username, false);
           s.x = msg.player.x; s.y = msg.player.y;
         }
         if (msg.type === "player_leave") {
           const s = playerSprites.get(msg.id);
-          if (s) { world.removeChild(s); playerSprites.delete(msg.id); playerParts.delete(msg.id); }
+          if (s) { world.removeChild(s); playerSprites.delete(msg.id); playerAnims.delete(msg.id); playerDolls.delete(msg.id); }
         }
         if (msg.type === "player_move") {
           const s = playerSprites.get(msg.id);
-          const p = playerParts.get(msg.id);
-          if (s && p) {
-            const dx = msg.x - s.x, dy = msg.y - s.y;
-            if (Math.abs(dx) > Math.abs(dy)) p.dir = dx > 0 ? "right" : "left";
-            else if (dy !== 0) p.dir = dy > 0 ? "down" : "up";
-            s.x = msg.x; s.y = msg.y;
-            s.zIndex = msg.y;
-            p.moving = msg.moving ?? true;
-          }
+          if (s) { s.x = msg.x; s.y = msg.y; s.zIndex = msg.y; }
         }
         if (msg.type === "chat") {
-          const s = msg.id === room.id ? localSprite : playerSprites.get(msg.id);
+          const s = msg.id === room.id ? localDoll.container : playerSprites.get(msg.id);
           if (s) showChatBubble(s, msg.text);
         }
       });
@@ -524,15 +575,7 @@ export default function GameCanvas({ room, username }: Props) {
       const MM_PW = MM_W / MM_BW;
       const MM_PH = MM_H / MM_BH;
 
-      const BIOME_MM_COLOR: Record<Biome, number> = {
-        village:  0x6ab36a,
-        forest:   0x2d6e35,
-        snow:     0xd8e8f5,
-        desert:   0xd4b040,
-        beach:    0xe8d060,
-        swamp:    0x3d5e28,
-        mountain: 0x8a9060,
-      };
+      const BIOME_MM_COLOR: Record<Biome, number> = { village: 0x6ab36a };
 
       const minimap = new Container();
       app.stage.addChild(minimap);
@@ -597,20 +640,20 @@ export default function GameCanvas({ room, username }: Props) {
       let localY = startY;
       let wasMoving = false;
 
-      app.ticker.add(() => {
+      let localDir: Dir = "down";
+      app.ticker.add((ticker) => {
         let dx = 0, dy = 0;
-        let dir: Dir = localParts.dir;
+        let dir: Dir = localDir;
         if (isDown("arrowup")    || isDown("z")) { dy = -1; dir = "up"; }
         if (isDown("arrowdown")  || isDown("s")) { dy =  1; dir = "down"; }
         if (isDown("arrowleft")  || isDown("q")) { dx = -1; dir = "left"; }
         if (isDown("arrowright") || isDown("d")) { dx =  1; dir = "right"; }
+        localDir = dir;
 
         const speed = isDown("shift") ? RUN_SPEED : WALK_SPEED;
         dx *= speed; dy *= speed;
 
         const isMoving = dx !== 0 || dy !== 0;
-        localParts.moving = isMoving;
-        localParts.dir = dir;
 
         if (isMoving) {
           // tentative axe X puis Y séparément (sliding le long des obstacles)
@@ -618,15 +661,54 @@ export default function GameCanvas({ room, username }: Props) {
           const ny = Math.max(0, Math.min(MAP_ROWS * TILE_SIZE - 24, localY + dy));
           if (!collidesAt(nx, localY)) localX = nx;
           if (!collidesAt(localX, ny)) localY = ny;
-          localSprite.x = localX;
-          localSprite.y = localY;
+          localDoll.container.x = localX;
+          localDoll.container.y = localY;
+          localDoll.container.zIndex = localY;
+          tickDoll(localDoll, true, dir as DollDir, ticker.deltaMS);
           room.send("move", { x: localX, y: localY, direction: dir, moving: true });
           try { localStorage.setItem("void_pos_main", JSON.stringify({ x: localX, y: localY })); } catch {}
-        } else if (wasMoving) {
+        } else {
+          localDoll.container.zIndex = localY;
+          tickDoll(localDoll, false, dir as DollDir, ticker.deltaMS);
+        }
+        if (wasMoving && !isMoving) {
           room.send("move", { x: localX, y: localY, direction: dir, moving: false });
           try { localStorage.setItem("void_pos_main", JSON.stringify({ x: localX, y: localY })); } catch {}
         }
         wasMoving = isMoving;
+
+        // Proximité portail → tooltip
+        const PORTAL_R = 48;
+        let nearPortal: PortalRef | null = null;
+        for (const p of portals) {
+          const ddx = localX - p.cx, ddy = localY - p.cy;
+          if (ddx * ddx + ddy * ddy < PORTAL_R * PORTAL_R) { nearPortal = p; break; }
+        }
+        if (nearPortal && !fadeRef.current.active) {
+          ttText.text = `Entrer : ${PORTAL_BIOME_COLORS[nearPortal.biome].label} [E]`;
+          ttBg.clear().roundRect(0, 0, ttText.width + 16, 28, 5).fill({ color: 0x000000, alpha: 0.78 });
+          portalTooltip.visible = true;
+          portalTooltip.x = app!.screen.width / 2 - ttText.width / 2;
+          portalTooltip.y = app!.screen.height - 100;
+          if (keys.has("e")) {
+            keys.delete("e"); // consomme la touche
+            fadeRef.current = { active: true, alpha: 0, biome: nearPortal.biome };
+          }
+        } else if (!fadeRef.current.active) {
+          portalTooltip.visible = false;
+        }
+
+        // Fondu de transition
+        if (fadeRef.current.active) {
+          portalTooltip.visible = false;
+          fadeRef.current.alpha = Math.min(1, fadeRef.current.alpha + 0.025);
+          fadeOverlay.clear()
+            .rect(0, 0, app!.screen.width, app!.screen.height)
+            .fill({ color: 0x000000, alpha: fadeRef.current.alpha });
+          if (fadeRef.current.alpha >= 1 && fadeRef.current.biome) {
+            onEnterBiomeRef.current?.(fadeRef.current.biome);
+          }
+        }
 
         const vw = app!.screen.width;
         const vh = app!.screen.height;
@@ -658,7 +740,11 @@ export default function GameCanvas({ room, username }: Props) {
       window.removeEventListener("keyup",     onKeyUp);
       document.removeEventListener("keyup",   onKeyUp);
       window.removeEventListener("blur",      onBlur);
-      if (app && app.renderer) app.destroy(true);
+      if (app && app.renderer) {
+        // Unload les textures du doll AVANT de détruire le contexte WebGL
+        // → BiomeCanvas pourra les recharger dans son nouveau contexte
+        unloadDollTextures(charCfg).finally(() => { if (app?.renderer) app.destroy(true); });
+      }
     };
   }, [room]);
 

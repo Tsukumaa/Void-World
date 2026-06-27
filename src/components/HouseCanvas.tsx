@@ -1,14 +1,19 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { Application, Graphics, Text, TextStyle, Container, Assets, Texture, Rectangle, Sprite, TilingSprite } from "pixi.js";
+import { Application, Graphics, Text, TextStyle, Container, Assets, Texture, Rectangle, TilingSprite } from "pixi.js";
 import { WorldRoom } from "@/hooks/useWorldRoom";
+import { drawPixelCharBody, drawPixelLeg, LEG_L_X, LEG_R_X, LEG_Y, CHAR_ABOVE } from "@/lib/pixelChar";
+import { type CharConfig, loadCharConfig } from "@/lib/charConfig";
+import { loadDoll, tickDoll, type PlayerDoll, type Dir as DollDir } from "@/lib/charSprite";
 
 interface Props {
   room: WorldRoom;
   username: string;
-  ownerName: string;   // à qui appartient la maison
-  onExit: () => void;  // retour au monde
+  ownerName: string;
+  charCfg?: CharConfig;
+  onExit: () => void;
+  onChangeChar?: () => void;
 }
 
 const TILE = 32;
@@ -58,7 +63,8 @@ function walkable(c: number, r: number): boolean {
   return false;
 }
 
-export default function HouseCanvas({ room, username, ownerName, onExit }: Props) {
+export default function HouseCanvas({ room, username, ownerName, charCfg, onExit, onChangeChar }: Props) {
+  const resolvedCfg = charCfg ?? loadCharConfig();
   const containerRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<HTMLInputElement>(null);
   const chatOpenRef  = useRef(false);
@@ -214,54 +220,30 @@ export default function HouseCanvas({ room, username, ownerName, onExit }: Props
       }
       world.addChild(fenceG);
 
-      // ---- Spritesheet perso (même que GameCanvas) ----
-      const charTex = await Assets.load("/tiles/sl_char.png") as Texture;
-      charTex.source.scaleMode = "nearest";
       type Dir = "down" | "up" | "right" | "left";
-      const CHAR_SCALE = TILE / 8;
-      const mkF = (y: number, x0: number, w: number) =>
-        [0,1,2,3].map(i => new Texture({ source: charTex.source, frame: new Rectangle(x0 + i * 48, y, w, 16) }));
-      const CHAR_FRAMES: Record<Dir, Texture[]> = {
-        down:  mkF(16,  17, 14),
-        up:    mkF(64,  17, 14),
-        right: mkF(160, 19, 10),
-        left:  mkF(112, 19, 10),
-      };
 
-      // ---- Joueurs (multijoueur) ----
+      // ---- Joueurs — paper doll local + pixel art fallback autres ----
       const playerSprites = new Map<string, Container>();
-      const playerParts   = new Map<string, { sprite: Sprite; walkTime: number; moving: boolean; dir: Dir }>();
+      const playerDolls   = new Map<string, PlayerDoll>();
+      type PlayerAnim = { legL: Graphics; legR: Graphics; body: Graphics; walkTime: number; step: number };
+      const playerAnims = new Map<string, PlayerAnim>();
 
-      function createPlayerSprite(id: string, name: string) {
+      function createFallbackSprite(id: string, name: string, isLocal = false) {
         const container = new Container();
         const shadow = new Graphics();
-        shadow.ellipse(0, 2, 10, 4).fill({ color: 0x000000, alpha: 0.2 });
+        shadow.ellipse(0, 2, 12, 5).fill({ color: 0x000000, alpha: 0.22 });
         container.addChild(shadow);
-        const sprite = new Sprite(CHAR_FRAMES.down[0]);
-        sprite.anchor.set(0.5, 1);
-        sprite.scale.set(CHAR_SCALE);
-        container.addChild(sprite);
+        const body = new Graphics(); drawPixelCharBody(body, isLocal); container.addChild(body);
+        const legL = new Graphics(); drawPixelLeg(legL, isLocal, false); legL.x = LEG_L_X; legL.y = LEG_Y; container.addChild(legL);
+        const legR = new Graphics(); drawPixelLeg(legR, isLocal, true);  legR.x = LEG_R_X; legR.y = LEG_Y; container.addChild(legR);
         const label = new Text({ text: name, style: new TextStyle({ fontSize: 9, fill: 0xffffff, fontFamily: "monospace", dropShadow: { color: 0x000000, blur: 2, distance: 1 } }) });
-        label.x = -label.width / 2; label.y = -CHAR_SCALE * 16 - 12;
+        label.x = -label.width / 2; label.y = -(CHAR_ABOVE + 4);
         container.addChild(label);
-        playerParts.set(id, { sprite, walkTime: 0, moving: false, dir: "down" });
+        playerAnims.set(id, { legL, legR, body, walkTime: 0, step: 0 });
         world.addChild(container);
         playerSprites.set(id, container);
         return container;
       }
-
-      // animation
-      app.ticker.add((ticker) => {
-        playerParts.forEach((p) => {
-          if (p.moving) {
-            p.walkTime += ticker.deltaMS;
-            p.sprite.texture = CHAR_FRAMES[p.dir][Math.floor(p.walkTime / 120) % 4];
-          } else {
-            p.walkTime = 0;
-            p.sprite.texture = CHAR_FRAMES[p.dir][0];
-          }
-        });
-      });
 
       function showChatBubble(sprite: Container, text: string) {
         const existing = sprite.getChildByLabel("bubble");
@@ -290,61 +272,56 @@ export default function HouseCanvas({ room, username, ownerName, onExit }: Props
       let localX = (EXIT_COL * TILE) + 6;
       let localY = (INT.bottom - 4) * TILE;
 
-      const localSprite = createPlayerSprite(room.id, username);
-      localSprite.x = localX; localSprite.y = localY;
-      const localParts = playerParts.get(room.id)!;
+      const localDoll = await loadDoll(resolvedCfg, username, true, world, app);
+      if (destroyed) { app.destroy(true); return; }
+      playerDolls.set(room.id, localDoll);
+      playerSprites.set(room.id, localDoll.container);
+      localDoll.container.x = localX; localDoll.container.y = localY;
 
       room.players.forEach((p) => {
         if (p.id === room.id) return;
-        const s = createPlayerSprite(p.id, p.username);
+        const s = createFallbackSprite(p.id, p.username, false);
         s.x = p.x; s.y = p.y;
       });
 
       room.onMessage((msg) => {
         if (msg.type === "player_join") {
           if (msg.player.id === room.id) return;
-          const s = createPlayerSprite(msg.player.id, msg.player.username);
+          const s = createFallbackSprite(msg.player.id, msg.player.username, false);
           s.x = msg.player.x; s.y = msg.player.y;
         }
         if (msg.type === "player_leave") {
           const s = playerSprites.get(msg.id);
-          if (s) { world.removeChild(s); playerSprites.delete(msg.id); playerParts.delete(msg.id); }
+          if (s) { world.removeChild(s); playerSprites.delete(msg.id); playerAnims.delete(msg.id); playerDolls.delete(msg.id); }
         }
         if (msg.type === "player_move") {
           const s = playerSprites.get(msg.id);
-          const p = playerParts.get(msg.id);
-          if (s && p) {
-            const dx = msg.x - s.x, dy = msg.y - s.y;
-            if (Math.abs(dx) > Math.abs(dy)) p.dir = dx > 0 ? "right" : "left";
-            else if (dy !== 0) p.dir = dy > 0 ? "down" : "up";
-            s.x = msg.x; s.y = msg.y;
-            p.moving = msg.moving ?? true;
-          }
+          if (s) { s.x = msg.x; s.y = msg.y; }
         }
         if (msg.type === "chat") {
-          const s = msg.id === room.id ? localSprite : playerSprites.get(msg.id);
+          const s = msg.id === room.id ? localDoll.container : playerSprites.get(msg.id);
           if (s) showChatBubble(s, msg.text);
         }
       });
 
       let wasMoving = false;
+      let localDir: Dir = "down";
 
       // point "pieds" pour collisions
       const feet = (x: number, y: number) => ({ c: Math.floor((x + 10) / TILE), r: Math.floor((y + 28) / TILE) });
 
-      app.ticker.add(() => {
+      app.ticker.add((ticker) => {
         let dx = 0, dy = 0;
-        let dir: Dir = localParts.dir;
+        let dir: Dir = localDir;
         if (isDown("arrowup")    || isDown("z")) { dy = -1; dir = "up"; }
         if (isDown("arrowdown")  || isDown("s")) { dy =  1; dir = "down"; }
         if (isDown("arrowleft")  || isDown("q")) { dx = -1; dir = "left"; }
         if (isDown("arrowright") || isDown("d")) { dx =  1; dir = "right"; }
+        localDir = dir;
         const speed = isDown("shift") ? RUN : WALK;
         dx *= speed; dy *= speed;
 
         const isMoving = dx !== 0 || dy !== 0;
-        localParts.moving = isMoving;
-        localParts.dir = dir;
 
         if (isMoving) {
           const nx = localX + dx;
@@ -354,7 +331,8 @@ export default function HouseCanvas({ room, username, ownerName, onExit }: Props
           const fy = feet(localX, ny);
           if (walkable(fy.c, fy.r)) localY = ny;
 
-          localSprite.x = localX; localSprite.y = localY;
+          localDoll.container.x = localX; localDoll.container.y = localY;
+          tickDoll(localDoll, true, dir as DollDir, ticker.deltaMS);
           room.send("move", { x: localX, y: localY, direction: dir, moving: true });
 
           // détection porte de sortie
@@ -363,7 +341,10 @@ export default function HouseCanvas({ room, username, ownerName, onExit }: Props
             exitedRef.current = true;
             onExit();
           }
-        } else if (wasMoving) {
+        } else {
+          tickDoll(localDoll, false, dir as DollDir, ticker.deltaMS);
+        }
+        if (wasMoving && !isMoving) {
           room.send("move", { x: localX, y: localY, direction: dir, moving: false });
         }
         wasMoving = isMoving;
@@ -401,6 +382,16 @@ export default function HouseCanvas({ room, username, ownerName, onExit }: Props
       >
         ← Sortir
       </button>
+
+      {/* Bouton miroir (changer de personnage) */}
+      {onChangeChar && (
+        <button
+          onClick={onChangeChar}
+          style={{ position: "absolute", top: 60, right: 16, background: "rgba(80,60,180,0.7)", border: "1px solid rgba(180,160,255,0.4)", borderRadius: 10, color: "#fff", padding: "8px 14px", cursor: "pointer", fontSize: 13, fontFamily: "monospace", backdropFilter: "blur(4px)" }}
+        >
+          🪞 Changer de perso
+        </button>
+      )}
 
       {/* Chat */}
       <div style={{ position: "absolute", bottom: 16, left: "50%", transform: "translateX(-50%)", width: 320 }}>

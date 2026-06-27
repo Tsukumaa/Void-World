@@ -1,131 +1,87 @@
 import { Graphics } from "pixi.js";
 
-// Personnage en pixel art — grille native 14x20, dessinée pixel par pixel.
-// Vue de face. Chaque caractère = une couleur de la palette.
-const ROWS = [
-  "....HHHHHH....",
-  "...HHHHHHHH...",
-  "..HHhhhhhhHH..",
-  "..HhSSSSSShH..",
-  ".HhSSSSSSSShH.",
-  ".HhSEESSEEShH.",
-  ".HhSSSSSSSShH.",
-  "..HSSSSSSSSH..",
-  "...KKKKKKKK...",
-  "..BBBBBBBBBB..",
-  ".BBBWBBBBWBBB.",
-  ".BBBBBBBBBBBB.",
-  "SBBBBBBBBBBBBS",
-  "SBBBBBBBBBBBBS",
-  ".DDDBBBBBBDDD.",
-  "..PPPPPPPPPP..",
-  "..PPPP..PPPP..",
-  "..PPPP..PPPP..",
-  "..ppPP..PPpp..",
-  "..OOOO..OOOO..",
+// Personnage pixel art — 14 cols × 17 rows corps + 5 rows jambes, PIXEL=2
+// Centré sur x=0, pieds à y=0
+export const PIXEL    = 2;
+const NAT_W  = 14;
+const BC     = 17; // body count rows
+const LC     = 5;  // leg count rows
+
+export const OX = -(NAT_W * PIXEL) / 2;          // = -14
+export const OY = -((BC + LC) * PIXEL);           // = -44  (pieds à y=0)
+export const LEG_Y   = OY + BC * PIXEL;           // = -44+34 = -10
+export const LEG_L_X = OX + 2 * PIXEL;            // = -14+4  = -10
+export const LEG_R_X = OX + 8 * PIXEL;            // = -14+16 =   2
+export const CHAR_ABOVE = -OY + PIXEL;            // = 46  (hauteur au-dessus y=0)
+
+// Corps — 14 chars × 17 rows (tous exactement 14)
+const BODY: string[] = [
+  "....HHHHHH....",  // 0  cheveux haut
+  "..HHHhhhhHHH..",  // 1  cheveux larges
+  "..HHhSSSShhH..",  // 2  front
+  "..HhSSSSSSHH..",  // 3  visage
+  "..HhSESSEShH..",  // 4  yeux
+  "..HhSSSSSSHH..",  // 5  joues
+  "..HhSSSSSSHH..",  // 6  bas visage
+  "..HhSSmSSShH..",  // 7  bouche (m=lèvres)
+  "...HHhSSHHH...",  // 8  menton
+  ".....KKKK.....",  // 9  cou
+  "...BBBBBBBB...",  // 10 col
+  "..BBBBBBBBBB..",  // 11 épaules
+  ".BBBWBBBBwBBB.",  // 12 poitrine (W/w=reflets)
+  ".BBBBBBBBBBB..",  // 13 ventre
+  "SBBBBBBBBBBBBS",  // 14 bras G (S=peau)
+  "SBBBBBBBBBBBBS",  // 15 bras D
+  "..DDDDDDDDDD..",  // 16 ceinture
 ];
 
-const PIXEL = 2;          // taille d'un pixel à l'écran
-const NAT_W = 14;
-const OFFSET_X = 10 - (NAT_W * PIXEL) / 2; // centré sur x≈10
-const OFFSET_Y = -10;     // pieds vers y≈30
+// Jambe gauche / droite — 4 cols × 5 rows
+const LEG_L: string[] = ["PPPP","PPPP","PPPP","ppPP","OOOO"];
+const LEG_R: string[] = ["PPPP","PPPP","PPPP","PPpp","OOOO"];
 
-function palette(isLocal: boolean): Record<string, number> {
+function pal(local: boolean): Record<string, number> {
   return {
-    H: 0x2f2418,                          // cheveux foncé
-    h: 0x4a3526,                          // cheveux
-    S: 0xffd9a8,                          // peau
-    K: 0xe6b487,                          // peau ombre (cou)
-    E: 0x2a2433,                          // yeux
-    B: isLocal ? 0x6c63ff : 0x43aa8b,     // haut
-    W: isLocal ? 0x9d96ff : 0x6fd1aa,     // haut reflet
-    D: isLocal ? 0x4f48c4 : 0x2f7d63,     // haut ombre
-    P: 0x3b3656,                          // pantalon
-    p: 0x2b2740,                          // pantalon ombre
-    O: 0x21202a,                          // chaussures
+    H: 0x261710,  // cheveux très foncé
+    h: 0x4a2e1a,  // cheveux
+    S: 0xfcd4a0,  // peau
+    K: 0xe0a870,  // cou ombre
+    E: 0x201828,  // œil pupille
+    m: 0xcc5050,  // lèvres
+    B: local ? 0x5545e0 : 0x2e8a5a,   // vêtement principal
+    W: local ? 0x8878ff : 0x55c07a,   // reflet gauche
+    w: local ? 0x7868f0 : 0x45b068,   // reflet droit
+    D: local ? 0x3328a8 : 0x1a6038,   // ceinture / ombre
+    P: 0x362e58,  // pantalon
+    p: 0x241e3e,  // pantalon ombre
+    O: 0x181220,  // chaussures
   };
 }
 
-const OUTLINE = 0x2a2233;
+const OUTLINE = 0x100c18;
 
-function filled(r: number, c: number): boolean {
-  if (r < 0 || r >= ROWS.length) return false;
-  const row = ROWS[r];
-  if (c < 0 || c >= row.length) return false;
-  return row[c] !== ".";
-}
-
-/** Dessine le personnage pixel art dans un Graphics (origine ~ coin haut-gauche du conteneur joueur). */
-export function drawPixelChar(g: Graphics, isLocal: boolean) {
-  const pal = palette(isLocal);
-  const maxW = Math.max(...ROWS.map((r) => r.length));
-
-  // contour sombre
-  for (let r = -1; r <= ROWS.length; r++) {
-    for (let c = -1; c <= maxW; c++) {
-      if (filled(r, c)) continue;
-      if (filled(r - 1, c) || filled(r + 1, c) || filled(r, c - 1) || filled(r, c + 1)) {
-        g.rect(OFFSET_X + c * PIXEL, OFFSET_Y + r * PIXEL, PIXEL, PIXEL).fill(OUTLINE);
-      }
-    }
-  }
-
-  for (let r = 0; r < ROWS.length; r++) {
-    const row = ROWS[r];
-    for (let c = 0; c < row.length; c++) {
-      const ch = row[c];
-      if (ch === ".") continue;
-      const color = pal[ch];
-      if (color === undefined) continue;
-      g.rect(OFFSET_X + c * PIXEL, OFFSET_Y + r * PIXEL, PIXEL, PIXEL).fill(color);
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Version animée : corps (sans jambes) + jambes séparées pour le walk-cycle
-// ---------------------------------------------------------------------------
-const BODY_COUNT = 16; // ROWS 0..15 (le reste = jambes)
-const LEG_L = ["PPPP", "PPPP", "ppPP", "OOOO"];
-const LEG_R = ["PPPP", "PPPP", "PPpp", "OOOO"];
-
-// positions (locales au conteneur joueur) des jambes
-export const LEG_L_X = OFFSET_X + 2 * PIXEL;
-export const LEG_R_X = OFFSET_X + 8 * PIXEL;
-export const LEG_Y = OFFSET_Y + BODY_COUNT * PIXEL;
-
-function drawSubGrid(
-  g: Graphics,
-  rows: string[],
-  pal: Record<string, number>,
-  ox: number,
-  oy: number,
-  outline: number
-) {
+function subgrid(g: Graphics, rows: string[], p: Record<string,number>, ox: number, oy: number) {
+  const maxW = Math.max(...rows.map(r => r.length));
   const f = (r: number, c: number) =>
     r >= 0 && r < rows.length && c >= 0 && c < rows[r].length && rows[r][c] !== ".";
-  const maxW = Math.max(...rows.map((r) => r.length));
   for (let r = -1; r <= rows.length; r++)
     for (let c = -1; c <= maxW; c++) {
-      if (f(r, c)) continue;
-      if (f(r - 1, c) || f(r + 1, c) || f(r, c - 1) || f(r, c + 1))
-        g.rect(ox + c * PIXEL, oy + r * PIXEL, PIXEL, PIXEL).fill(outline);
+      if (f(r,c)) continue;
+      if (f(r-1,c)||f(r+1,c)||f(r,c-1)||f(r,c+1))
+        g.rect(ox + c*PIXEL, oy + r*PIXEL, PIXEL, PIXEL).fill(OUTLINE);
     }
   for (let r = 0; r < rows.length; r++)
     for (let c = 0; c < rows[r].length; c++) {
       const ch = rows[r][c];
       if (ch === ".") continue;
-      const color = pal[ch];
-      if (color !== undefined) g.rect(ox + c * PIXEL, oy + r * PIXEL, PIXEL, PIXEL).fill(color);
+      const col = p[ch];
+      if (col !== undefined) g.rect(ox + c*PIXEL, oy + r*PIXEL, PIXEL, PIXEL).fill(col);
     }
 }
 
-/** Corps seul (tête + torse + bras + hanches), sans les jambes. */
-export function drawPixelCharBody(g: Graphics, isLocal: boolean) {
-  drawSubGrid(g, ROWS.slice(0, BODY_COUNT), palette(isLocal), OFFSET_X, OFFSET_Y, OUTLINE);
+export function drawPixelCharBody(g: Graphics, local: boolean) {
+  subgrid(g, BODY, pal(local), OX, OY);
 }
 
-/** Une jambe, dessinée à l'origine (0,0) du conteneur de jambe. */
-export function drawPixelLeg(g: Graphics, isLocal: boolean, right: boolean) {
-  drawSubGrid(g, right ? LEG_R : LEG_L, palette(isLocal), 0, 0, OUTLINE);
+export function drawPixelLeg(g: Graphics, local: boolean, right: boolean) {
+  subgrid(g, right ? LEG_R : LEG_L, pal(local), 0, 0);
 }

@@ -619,3 +619,357 @@ export function getHouseHitbox(col: number, row: number, tileSize: number, seed 
   const wallY = row * tileSize + wallRowStart * scale;
   return { x: col * tileSize, y: wallY, w: cols * scale, h: wallH };
 }
+
+// ===========================================================================
+// DÉCORATIONS HUB — fontaine, lampadaire, banc, statue
+// ===========================================================================
+
+// Fontaine — pilier central + bassin en pierre + eau animée
+// Fontaine — grand bassin octogonal + pilier central
+const FOUNTAIN_BASIN = [
+  "......ssssssssssss......",
+  "....ssSSSSSSSSSSSSss....",
+  "...sSSSSSSSSSSSSSSSss...",
+  "..sSSSSSSSSSSSSSSSSSs...",
+  "..sSSSSSSSSSSSSSSSSSs...",
+  "..sSSSSSSSSSSSSSSSSSs...",
+  "..sSSSSSSSSSSSSSSSSSs...",
+  "..sSSSSSSSSSSSSSSSSSs...",
+  "..sSSSSSSSSSSSSSSSSSs...",
+  "...sSSSSSSSSSSSSSSSss...",
+  "....ssSSSSSSSSSSSSss....",
+  "......ssssssssssss......",
+  ".......BBBBBBBBBB.......",
+  "......BBBBBBBBBBBB......",
+  ".....BBbbbbbbbbbbBB.....",
+];
+const FOUNTAIN_PAL = { s: 0xa89870, S: 0xc8b890, B: 0x9a8860, b: 0x7a6840 };
+
+// Pilier — deux vasques étagées larges
+const FOUNTAIN_PILLAR = [
+  ".ooooooooo.",  // vasque haute — bord
+  "oOOOOOOOOOo",
+  "oOOOOOOOOOo",
+  ".ooooooooo.",  // fond vasque haute
+  "....ppp.....",  // tige
+  "...pPPPp....",
+  "..pPPPPPp...",  // vasque basse — bord
+  ".pPPPPPPPp..",
+  ".pPPPPPPPp..",
+  "..pppppppp..",
+  "....CCC.....",  // colonne
+  "....CCC.....",
+  "...CCCCC....",
+];
+const PILLAR_PAL = { o: 0xb8a878, O: 0xd8c8a0, p: 0xa89868, P: 0xc8b888, C: 0xa89060 };
+
+export function drawFountain(world: Container, cx: number, cy: number): Graphics {
+  const S = 4;
+  const g = new Graphics();
+  g.ellipse(cx, cy + 6, 60, 16).fill({ color: 0x000000, alpha: 0.2 });
+  drawGrid(g, FOUNTAIN_BASIN,  FOUNTAIN_PAL, S, cx, cy,      0x5a4a28);
+  drawGrid(g, FOUNTAIN_PILLAR, PILLAR_PAL,   S, cx, cy - 32, 0x5a4a28);
+  world.addChild(g);
+  const water = new Graphics();
+  world.addChild(water);
+  return water;
+}
+
+export function animateFountain(water: Graphics, cx: number, cy: number, t: number) {
+  water.clear();
+  const pulse = 0.65 + 0.35 * Math.sin(t * 0.0025);
+  // L'eau est dans le bassin : centre à cy-38 (bassin 15 lignes × scale4 = 60px, eau rows 1-10)
+  const wy = cy - 38;
+  // Mare intérieure
+  water.ellipse(cx, wy, 40, 16).fill({ color: 0x4aa8e0, alpha: 0.82 });
+  water.ellipse(cx, wy, 36, 12).fill({ color: 0x6ec8f8, alpha: 0.45 * pulse });
+  // Ondulations concentriques
+  for (let i = 0; i < 3; i++) {
+    const r = 8 + i * 7 + Math.sin(t * 0.002 + i) * 2;
+    water.ellipse(cx, wy, r, r * 0.38).stroke({ color: 0x90d8ff, width: 1.5, alpha: (0.45 - i * 0.12) * pulse });
+  }
+  // Cascades depuis les 4 bords de la vasque haute vers le bassin
+  const vasqueY = cy - 80;
+  const cascadeAngles = [0, Math.PI * 0.5, Math.PI, Math.PI * 1.5];
+  for (let i = 0; i < cascadeAngles.length; i++) {
+    const angle = cascadeAngles[i];
+    const srcX = cx + Math.cos(angle) * 18;
+    const srcY = vasqueY + 6;
+    // filet d'eau vertical tombant
+    const flow = 0.5 + 0.5 * Math.sin(t * 0.003 + i * 1.5);
+    for (let d = 0; d < 5; d++) {
+      const dropY = srcY + d * 5 + ((t * 0.08 + i * 7 + d * 3) % 25);
+      if (dropY < wy + 4) {
+        water.circle(srcX, dropY, 1.5 - d * 0.15).fill({ color: 0xb8e8ff, alpha: (0.9 - d * 0.15) * pulse * flow });
+      }
+    }
+    // splash arrivée dans le bassin bas
+    water.circle(srcX, wy - 4, 2 + flow).fill({ color: 0x90d0f8, alpha: 0.55 * pulse });
+  }
+  // Reflets
+  for (let i = 0; i < 3; i++) {
+    const rx = cx - 16 + i * 14 + Math.sin(t * 0.002 + i) * 3;
+    water.rect(rx, wy - 3 + Math.cos(t * 0.0015 + i) * 2, 10 + i * 2, 2).fill({ color: 0xd0f0ff, alpha: 0.4 * pulse });
+  }
+}
+
+// Lampadaire — lanterne ronde sur poteau forgé
+export function drawLamp(world: Container, cx: number, cy: number) {
+  const g = new Graphics();
+  g.ellipse(cx, cy + 2, 5, 2).fill({ color: 0x000000, alpha: 0.18 });
+  // base
+  g.rect(cx - 5, cy - 4, 10, 4).fill(0x7a6848);
+  g.rect(cx - 4, cy - 4, 10, 2).fill(0x9a8860);
+  // poteau
+  g.rect(cx - 2, cy - 28, 4, 24).fill(0x6a5838);
+  g.rect(cx - 2, cy - 28, 2, 24).fill(0x8a7050);
+  // coude
+  g.rect(cx - 2, cy - 30, 10, 4).fill(0x6a5838);
+  g.rect(cx + 6, cy - 34, 4, 8).fill(0x6a5838);
+  g.rect(cx + 6, cy - 34, 2, 8).fill(0x8a7050);
+  // lanterne
+  g.rect(cx + 3, cy - 42, 10, 10).fill(0x5a4828);
+  g.rect(cx + 4, cy - 41, 8, 8).fill(0xffe890);
+  g.rect(cx + 4, cy - 41, 8, 2).fill(0xfff4b0);
+  g.rect(cx + 3, cy - 43, 10, 2).fill(0x7a6848);
+  // halo
+  g.circle(cx + 8, cy - 37, 12).fill({ color: 0xffe860, alpha: 0.12 });
+  world.addChild(g);
+}
+
+// Banc en pierre — large et lisible top-down
+export function drawBench(world: Container, cx: number, cy: number, horizontal = true) {
+  const g = new Graphics();
+  if (horizontal) {
+    g.ellipse(cx, cy + 2, 22, 5).fill({ color: 0x000000, alpha: 0.12 });
+    // dossier (haut)
+    g.rect(cx - 20, cy - 14, 40, 6).fill(0xc8b898);
+    g.rect(cx - 20, cy - 14, 40, 2).fill(0xe0d0b0);
+    // assise
+    g.rect(cx - 18, cy - 8, 36, 8).fill(0xd8c8a0);
+    g.rect(cx - 18, cy - 8, 36, 2).fill(0xeee0c0);
+    // pieds
+    g.rect(cx - 16, cy,     6, 4).fill(0xa89870);
+    g.rect(cx + 10, cy,     6, 4).fill(0xa89870);
+  } else {
+    g.ellipse(cx + 2, cy, 5, 22).fill({ color: 0x000000, alpha: 0.12 });
+    g.rect(cx - 14, cy - 20, 6, 40).fill(0xc8b898);
+    g.rect(cx - 8,  cy - 18, 8, 36).fill(0xd8c8a0);
+    g.rect(cx - 14, cy - 20, 2, 40).fill(0xe0d0b0);
+    g.rect(cx,      cy - 16, 4, 6).fill(0xa89870);
+    g.rect(cx,      cy + 10, 4, 6).fill(0xa89870);
+  }
+  world.addChild(g);
+}
+
+// Urne décorative — vase large sur socle
+const URN_SHAPE = [
+  "...OOO...",  // couvercle
+  "..OOOOO..",
+  ".OOOOOOO.",
+  ".OOOOOOO.",
+  "OOOOOOOOO", // panse max
+  ".OOOOOOO.",
+  "..OOOOO..",
+  "...ooo...",  // pied
+  "..ooooo..",
+  ".ooooooo.",
+];
+const URN_PAL = { O: 0xd0b888, o: 0xb09868 };
+
+export function drawStatue(world: Container, cx: number, cy: number) {
+  const g = new Graphics();
+  g.ellipse(cx, cy + 4, 20, 6).fill({ color: 0x000000, alpha: 0.2 });
+  // socle
+  g.rect(cx - 14, cy - 6, 28, 6).fill(0xa89870);
+  g.rect(cx - 14, cy - 6, 28, 2).fill(0xc8b898);
+  // urne
+  drawGrid(g, URN_SHAPE, URN_PAL, 3, cx, cy - 8, 0x6a5030);
+  // motif doré sur la panse
+  g.rect(cx - 6, cy - 22, 12, 2).fill(0xf0c840);
+  g.rect(cx - 4, cy - 26, 8,  2).fill(0xf0c840);
+  g.rect(cx - 2, cy - 30, 4,  2).fill(0xf0c840);
+  world.addChild(g);
+}
+
+// ===========================================================================
+// PORTAIL DE BIOME — arche en pixel art avec glow animé
+// ===========================================================================
+export type BiomeKey = "forest" | "snow" | "desert" | "beach" | "swamp" | "mountain";
+
+export const BIOME_COLORS: Record<BiomeKey, { stone: number; glow: number; glowDark: number; label: string }> = {
+  forest:   { stone: 0x5a7a3a, glow: 0x4cdb6a, glowDark: 0x2a8a40, label: "Forêt" },
+  snow:     { stone: 0x8898b8, glow: 0xa8d8ff, glowDark: 0x6898d0, label: "Neige" },
+  desert:   { stone: 0xa87840, glow: 0xffcc44, glowDark: 0xc88820, label: "Désert" },
+  beach:    { stone: 0x6888a0, glow: 0x40ccff, glowDark: 0x2088c0, label: "Plage" },
+  swamp:    { stone: 0x4a5a38, glow: 0x80c840, glowDark: 0x486828, label: "Marécage" },
+  mountain: { stone: 0x707870, glow: 0xd0e8f0, glowDark: 0x9090a8, label: "Montagne" },
+};
+
+// Portail pixel art — arche en blocs de pierre + glow intérieur animé
+// Grille 20×22 px (S=3 → 60×66px rendu)
+const PORTAL_GRID = [
+  ".....SSSSSSSSS.....",  // sommet arche
+  "....Ss.......sS....",
+  "...Ss.........sS...",
+  "..Ss...........sS..",
+  "..S.............S..",
+  "..S.............S..",
+  "..S.............S..",
+  "..S.............S..",
+  "..S.............S..",
+  "..S.............S..",
+  "..S.............S..",
+  "..S.............S..",
+  "..S.............S..",
+  "..S.............S..",
+  "..S.............S..",
+  "..SS...........SS..",
+  "...SSSSSSSSSSSSS...",
+];
+
+export function drawPortal(
+  world: Container,
+  cx: number,
+  cy: number,
+  biome: BiomeKey,
+): { outer: Graphics; inner: Graphics } {
+  const c  = BIOME_COLORS[biome];
+  const S  = 3;
+  const st = c.stone;
+  const sl = lighten(st, 0.25);
+  const sd = darken(st, 0.25);
+
+  const outer = new Graphics();
+
+  // Ombre au sol
+  outer.ellipse(cx, cy + 4, 32, 9).fill({ color: 0x000000, alpha: 0.22 });
+
+  // Arche en blocs de pierre depuis la grille
+  const gW = PORTAL_GRID[0].length;
+  const gH = PORTAL_GRID.length;
+  const offX = cx - Math.floor(gW * S / 2);
+  const offY = cy - gH * S;
+
+  for (let r = 0; r < gH; r++) {
+    for (let cc = 0; cc < gW; cc++) {
+      const ch = PORTAL_GRID[r][cc];
+      if (ch === ".") continue;
+      const px = offX + cc * S;
+      const py = offY + r  * S;
+      // couleur de base selon coin/bord
+      const col = ch === "S" ? st : sd;
+      outer.rect(px, py, S, S).fill(col);
+      // reflet haut-gauche
+      if (ch === "S") {
+        outer.rect(px, py, S, 1).fill(sl);
+        outer.rect(px, py, 1, S).fill(sl);
+      }
+    }
+  }
+
+  // Runes sur les piliers (gauche + droite)
+  for (let i = 0; i < 4; i++) {
+    const ry = offY + (4 + i * 3) * S;
+    outer.rect(offX + 2 * S, ry, S * 2, S).fill(c.glow);
+    outer.rect(offX + (gW - 4) * S, ry, S * 2, S).fill(c.glow);
+  }
+
+  world.addChild(outer);
+
+  // Inner glow animé
+  const inner = new Graphics();
+  const iX = offX + 3 * S;
+  const iY = offY + 4 * S;
+  const iW = (gW - 6) * S;
+  const iH = (gH - 5) * S;
+  _drawInnerGlow(inner, iX, iY, iW, iH, c.glow, c.glowDark, 0);
+  world.addChild(inner);
+
+  return { outer, inner, _ix: iX, _iy: iY, _iw: iW, _ih: iH } as unknown as { outer: Graphics; inner: Graphics };
+}
+
+function _drawInnerGlow(g: Graphics, x: number, y: number, w: number, h: number, glow: number, glowDark: number, t: number) {
+  g.clear();
+  const pulse = 0.75 + 0.25 * Math.sin(t * 0.0025);
+
+  // Fond coloré
+  g.rect(x, y, w, h).fill({ color: glowDark, alpha: 0.88 });
+
+  // Vagues horizontales de lumière
+  for (let row = 0; row < Math.floor(h / 3); row++) {
+    const wave = Math.sin(t * 0.003 + row * 0.45) * 0.5 + 0.5;
+    g.rect(x + 2, y + row * 3, w - 4, 2).fill({ color: glow, alpha: wave * 0.55 * pulse });
+  }
+
+  // Halo central
+  g.ellipse(x + w / 2, y + h / 2, w * 0.38, h * 0.3).fill({ color: glow, alpha: 0.18 * pulse });
+
+  // Particules qui montent
+  for (let i = 0; i < 5; i++) {
+    const px = x + 4 + ((Math.sin(t * 0.0015 + i * 1.3) * 0.5 + 0.5) * (w - 8));
+    const py = y + h - 2 - ((t * 0.02 + i * (h / 5)) % h);
+    g.circle(px, py, 2).fill({ color: glow, alpha: 0.85 * pulse });
+  }
+}
+
+// Cache des paramètres intérieurs par biome (pour l'animation)
+const _portalCache = new Map<Graphics, { x: number; y: number; w: number; h: number; biome: BiomeKey }>();
+
+export function drawPortalFull(
+  world: Container, cx: number, cy: number, biome: BiomeKey,
+): { outer: Graphics; inner: Graphics } {
+  const c  = BIOME_COLORS[biome];
+  const S  = 3;
+  const gW = PORTAL_GRID[0].length;
+  const gH = PORTAL_GRID.length;
+  const offX = cx - Math.floor(gW * S / 2);
+  const offY = cy - gH * S;
+  const iX = offX + 3 * S, iY = offY + 4 * S;
+  const iW = (gW - 6) * S, iH = (gH - 5) * S;
+
+  const st = c.stone, sl = lighten(st, 0.25), sd = darken(st, 0.25);
+  const outer = new Graphics();
+  outer.ellipse(cx, cy + 4, 32, 9).fill({ color: 0x000000, alpha: 0.22 });
+  for (let r = 0; r < gH; r++) {
+    for (let cc = 0; cc < gW; cc++) {
+      const ch = PORTAL_GRID[r][cc];
+      if (ch === ".") continue;
+      const px = offX + cc * S, py = offY + r * S;
+      outer.rect(px, py, S, S).fill(ch === "S" ? st : sd);
+      if (ch === "S") { outer.rect(px, py, S, 1).fill(sl); outer.rect(px, py, 1, S).fill(sl); }
+    }
+  }
+  for (let i = 0; i < 4; i++) {
+    const ry = offY + (4 + i * 3) * S;
+    outer.rect(offX + 2 * S, ry, S * 2, S).fill(c.glow);
+    outer.rect(offX + (gW - 4) * S, ry, S * 2, S).fill(c.glow);
+  }
+  world.addChild(outer);
+
+  const inner = new Graphics();
+  _drawInnerGlow(inner, iX, iY, iW, iH, c.glow, c.glowDark, 0);
+  _portalCache.set(inner, { x: iX, y: iY, w: iW, h: iH, biome });
+  world.addChild(inner);
+  return { outer, inner };
+}
+
+export function animatePortal(inner: Graphics, cx: number, cy: number, biome: BiomeKey, t: number) {
+  const cached = _portalCache.get(inner);
+  if (!cached) return;
+  const c = BIOME_COLORS[cached.biome];
+  _drawInnerGlow(inner, cached.x, cached.y, cached.w, cached.h, c.glow, c.glowDark, t);
+}
+
+function darken(color: number, amount: number): number {
+  const r = Math.max(0, ((color >> 16) & 0xff) * (1 - amount));
+  const g = Math.max(0, ((color >> 8)  & 0xff) * (1 - amount));
+  const b = Math.max(0, ((color)       & 0xff) * (1 - amount));
+  return (r << 16) | (g << 8) | b;
+}
+function lighten(color: number, amount: number): number {
+  const r = Math.min(255, ((color >> 16) & 0xff) * (1 + amount));
+  const g = Math.min(255, ((color >> 8)  & 0xff) * (1 + amount));
+  const b = Math.min(255, ((color)       & 0xff) * (1 + amount));
+  return (Math.round(r) << 16) | (Math.round(g) << 8) | Math.round(b);
+}
