@@ -1,8 +1,25 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { Application, Graphics, Text, TextStyle, Container } from "pixi.js";
+import { Application, Graphics, Text, TextStyle, Container, Assets, Texture, Rectangle, Sprite } from "pixi.js";
 import { WorldRoom } from "@/hooks/useWorldRoom";
+import {
+  drawTree as pxTree,
+  drawCactus as pxCactus,
+  drawPalmTree as pxPalm,
+  drawSnowTree as pxSnowTree,
+  drawSwampTree as pxSwampTree,
+  drawRock as pxRock,
+  drawMountainRock as pxMountainRock,
+  drawHouse as pxHouse,
+  getHouseHitbox,
+  drawMountain as pxMountain,
+  decorBush,
+  decorFlowers,
+  decorGrassTuft,
+  decorPebble,
+  decorSparkle,
+} from "@/lib/pixelArt";
 
 interface Props {
   room: WorldRoom;
@@ -100,157 +117,100 @@ function generateMap(): number[][] {
   return map;
 }
 
+// Bruit déterministe 0..1 (stable par tuile)
+function rnd(c: number, r: number, salt: number): number {
+  let h = (c * 374761393 + r * 668265263 + salt * 2246822519) >>> 0;
+  h = ((h ^ (h >>> 13)) * 1274126177) >>> 0;
+  return (h >>> 0) / 4294967295;
+}
+
+// Texture par biome : nuances de base, ombre (taches), touffe d'herbe, fleurs
+const TEX: Record<Biome, { shades: number[]; dark: number; tuft?: number; flower?: number[] }> = {
+  village:  { shades: [0x7ec87a, 0x77c073, 0x88d084], dark: 0x63ab60, tuft: 0x9bdc95, flower: [0xffffff, 0xf5d23b, 0xe96b9c, 0xb98cf0] },
+  forest:   { shades: [0x4a8c3f, 0x437f39, 0x539646], dark: 0x376b30, tuft: 0x66a85a, flower: [0xf5e84a, 0xffffff] },
+  swamp:    { shades: [0x5a7a40, 0x527238, 0x63824a], dark: 0x42602e, tuft: 0x6f9050 },
+  snow:     { shades: [0xe8f0f8, 0xe1eaf4, 0xeff5fc], dark: 0xd2dfee, flower: [0xffffff, 0xc5dcf2] },
+  desert:   { shades: [0xe8c97a, 0xe1c06f, 0xefd488], dark: 0xccab5c },
+  beach:    { shades: [0xf0e08a, 0xe9d77f, 0xf6e99b], dark: 0xd7c46b },
+  mountain: { shades: [0xa0a878, 0x98a06f, 0xaab083], dark: 0x848c5e },
+};
+
 function drawTile(g: Graphics, x: number, y: number, type: number, col: number, row: number) {
+  // Eau : base + ondulations
   if (type === 2) {
-    const dark = (col + row) % 2 === 0;
-    g.rect(x, y, TILE_SIZE, TILE_SIZE).fill(dark ? C.waterDark : C.water);
+    g.rect(x, y, TILE_SIZE, TILE_SIZE).fill(C.water);
+    const ry1 = y + 6 + Math.floor(rnd(col, row, 1) * 4) * 2;
+    const ry2 = y + 20 + Math.floor(rnd(col, row, 2) * 4) * 2;
+    g.rect(x + 4, ry1, 10, 2).fill(0x6aa6e0);
+    g.rect(x + 18, ry2, 8, 2).fill(0x6aa6e0);
+    g.rect(x + 2, y, TILE_SIZE, 2).fill({ color: C.waterDark, alpha: 0.5 });
     return;
   }
-  const biome = getBiome(col, row);
-  const [light, dark] = BIOME_COLORS[biome];
-  const checker = (col + row) % 2 === 0;
+
+  // Chemin de terre texturé
   if (type === 1) {
-    g.rect(x, y, TILE_SIZE, TILE_SIZE).fill(checker ? C.dirtDark : C.dirt);
-  } else {
-    g.rect(x, y, TILE_SIZE, TILE_SIZE).fill(checker ? dark : light);
+    g.rect(x, y, TILE_SIZE, TILE_SIZE).fill(rnd(col, row, 1) < 0.5 ? C.dirt : C.dirtDark);
+    for (let i = 0; i < 4; i++) {
+      const px = x + Math.floor(rnd(col, row, 10 + i) * 15) * 2;
+      const py = y + Math.floor(rnd(col, row, 20 + i) * 15) * 2;
+      g.rect(px, py, 2, 2).fill(0xb8966a);
+    }
+    // petit caillou occasionnel
+    if (rnd(col, row, 5) < 0.15) {
+      const px = x + Math.floor(rnd(col, row, 6) * 13) * 2;
+      const py = y + Math.floor(rnd(col, row, 7) * 13) * 2;
+      g.rect(px, py, 4, 3).fill(0x9e9e9e);
+      g.rect(px, py, 4, 1).fill(0xbcbcbc);
+    }
+    return;
+  }
+
+  // Sol naturel texturé
+  const biome = getBiome(col, row);
+  const tex = TEX[biome];
+  const base = tex.shades[Math.floor(rnd(col, row, 1) * tex.shades.length)];
+  g.rect(x, y, TILE_SIZE, TILE_SIZE).fill(base);
+
+  // taches d'ombre
+  const specks = 2 + Math.floor(rnd(col, row, 2) * 2);
+  for (let i = 0; i < specks; i++) {
+    const px = x + Math.floor(rnd(col, row, 30 + i) * 15) * 2;
+    const py = y + Math.floor(rnd(col, row, 40 + i) * 15) * 2;
+    g.rect(px, py, 2, 2).fill(tex.dark);
+  }
+
+  // touffe d'herbe
+  if (tex.tuft && rnd(col, row, 3) < 0.4) {
+    const tx = x + 6 + Math.floor(rnd(col, row, 4) * 8) * 2;
+    const ty = y + 14 + Math.floor(rnd(col, row, 5) * 5) * 2;
+    g.rect(tx, ty, 2, 6).fill(tex.tuft);
+    g.rect(tx - 2, ty + 2, 2, 4).fill(tex.tuft);
+    g.rect(tx + 2, ty + 2, 2, 4).fill(tex.tuft);
+  }
+
+  // fleur / éclat rare
+  if (tex.flower && rnd(col, row, 6) < 0.05) {
+    const fc = tex.flower[Math.floor(rnd(col, row, 7) * tex.flower.length)];
+    const fx = x + 6 + Math.floor(rnd(col, row, 8) * 8) * 2;
+    const fy = y + 8 + Math.floor(rnd(col, row, 9) * 8) * 2;
+    g.rect(fx - 2, fy, 2, 2).fill(fc);
+    g.rect(fx + 2, fy, 2, 2).fill(fc);
+    g.rect(fx, fy - 2, 2, 2).fill(fc);
+    g.rect(fx, fy + 2, 2, 2).fill(fc);
+    g.rect(fx, fy, 2, 2).fill(0xffe08a);
   }
 }
 
 
-function drawCactus(world: Container, cx: number, cy: number) {
-  const g = new Graphics();
-  g.ellipse(cx, cy + 2, 7, 3).fill({ color: C.shadow, alpha: 0.15 });
-  g.roundRect(cx - 4, cy - 28, 8, 30, 4).fill(0x5aab55);
-  g.roundRect(cx - 14, cy - 20, 12, 6, 3).fill(0x5aab55);
-  g.roundRect(cx + 4, cy - 15, 10, 6, 3).fill(0x5aab55);
-  g.circle(cx, cy - 28, 5).fill(0x7acc77);
-  world.addChild(g);
-}
-
-function drawPalmTree(world: Container, cx: number, cy: number) {
-  const g = new Graphics();
-  g.ellipse(cx, cy + 2, 9, 4).fill({ color: C.shadow, alpha: 0.15 });
-  // tronc courbé
-  g.roundRect(cx - 3, cy - 26, 7, 28, 3).fill(0xa0784a);
-  // feuilles
-  const leafColor = 0x4db848;
-  g.poly([cx, cy - 28, cx - 22, cy - 24, cx - 8, cy - 32]).fill(leafColor);
-  g.poly([cx, cy - 28, cx + 22, cy - 24, cx + 8, cy - 32]).fill(leafColor);
-  g.poly([cx, cy - 28, cx - 14, cy - 38, cx + 2, cy - 36]).fill(leafColor);
-  g.poly([cx, cy - 28, cx + 14, cy - 38, cx - 2, cy - 36]).fill(leafColor);
-  g.poly([cx, cy - 28, cx, cy - 40, cx - 6, cy - 34]).fill(leafColor);
-  // noix de coco
-  g.circle(cx + 3, cy - 27, 4).fill(0x8b6914);
-  g.circle(cx - 4, cy - 26, 3).fill(0x7a5c10);
-  world.addChild(g);
-}
-
-function drawSnowTree(world: Container, cx: number, cy: number) {
-  const g = new Graphics();
-  g.ellipse(cx, cy + 2, 9, 4).fill({ color: C.shadow, alpha: 0.12 });
-  g.roundRect(cx - 3, cy - 14, 7, 16, 2).fill(C.treeTrunk);
-  // sapin (couches)
-  g.poly([cx, cy - 44, cx - 14, cy - 24, cx + 14, cy - 24]).fill(0x2d6e35);
-  g.poly([cx, cy - 38, cx - 11, cy - 20, cx + 11, cy - 20]).fill(0x357a3e);
-  g.poly([cx, cy - 30, cx - 13, cy - 10, cx + 13, cy - 10]).fill(0x2d6e35);
-  // neige
-  g.poly([cx, cy - 44, cx - 7, cy - 30, cx + 7, cy - 30]).fill(0xe8f0f8);
-  g.poly([cx, cy - 38, cx - 5, cy - 26, cx + 5, cy - 26]).fill(0xe0eaf5);
-  g.circle(cx, cy - 44, 3).fill(0xf0f6ff);
-  world.addChild(g);
-}
-
-function drawSwampTree(world: Container, cx: number, cy: number) {
-  const g = new Graphics();
-  g.ellipse(cx, cy + 2, 9, 4).fill({ color: C.shadow, alpha: 0.15 });
-  g.roundRect(cx - 3, cy - 18, 7, 20, 2).fill(0x5a4a2a);
-  // racines
-  g.poly([cx - 3, cy - 2, cx - 14, cy + 4, cx - 8, cy]).fill(0x4a3a1e);
-  g.poly([cx + 3, cy - 2, cx + 14, cy + 4, cx + 8, cy]).fill(0x4a3a1e);
-  // feuillage épars
-  g.circle(cx, cy - 30, 13).fill(0x4a7a30);
-  g.circle(cx - 8, cy - 26, 9).fill(0x3d6a26);
-  g.circle(cx + 8, cy - 26, 9).fill(0x3d6a26);
-  g.circle(cx, cy - 22, 8).fill(0x4a7a30);
-  // mousse
-  g.ellipse(cx, cy - 18, 10, 4).fill({ color: 0x5aaa40, alpha: 0.5 });
-  world.addChild(g);
-}
-
-function drawMountainRock(world: Container, cx: number, cy: number) {
-  const g = new Graphics();
-  g.ellipse(cx, cy + 3, 22, 8).fill({ color: C.shadow, alpha: 0.18 });
-  g.poly([cx, cy - 40, cx - 22, cy, cx + 22, cy]).fill(0x888f60);
-  g.poly([cx - 6, cy - 40, cx - 26, cy - 2, cx + 10, cy - 2]).fill(0x9a9e72);
-  g.poly([cx, cy - 40, cx - 10, cy - 18, cx + 10, cy - 18]).fill(0xdde8f0);
-  g.poly([cx - 18, cy, cx - 26, cy - 8, cx - 8, cy]).fill(0x777a50);
-  world.addChild(g);
-}
-
-function drawTree(world: Container, cx: number, cy: number) {
-  const g = new Graphics();
-  // ombre
-  g.ellipse(cx, cy + 2, 10, 5).fill({ color: C.shadow, alpha: 0.15 });
-  // tronc
-  g.roundRect(cx - 4, cy - 14, 8, 16, 2).fill(C.treeTrunk);
-  // feuillage couche 3 (fond)
-  g.circle(cx, cy - 28, 14).fill(C.treeTop2);
-  // feuillage couche 2
-  g.circle(cx - 6, cy - 32, 11).fill(C.treeTop2);
-  g.circle(cx + 6, cy - 32, 11).fill(C.treeTop2);
-  // feuillage couche 1 (devant)
-  g.circle(cx, cy - 36, 13).fill(C.treeTop);
-  // reflet lumineux
-  g.circle(cx - 3, cy - 40, 4).fill({ color: 0xffffff, alpha: 0.12 });
-  world.addChild(g);
-}
-
-function drawRock(world: Container, cx: number, cy: number) {
-  const g = new Graphics();
-  // ombre
-  g.ellipse(cx, cy + 2, 16, 6).fill({ color: C.shadow, alpha: 0.15 });
-  // gros rocher
-  g.ellipse(cx, cy - 8, 18, 13).fill(C.rockDark);
-  g.ellipse(cx - 2, cy - 10, 16, 12).fill(C.rock);
-  // petit rocher à droite
-  g.ellipse(cx + 14, cy - 3, 9, 7).fill(C.rockDark);
-  g.ellipse(cx + 13, cy - 4, 8, 6).fill(C.rock);
-  // reflet
-  g.ellipse(cx - 4, cy - 14, 5, 3).fill({ color: 0xffffff, alpha: 0.25 });
-  world.addChild(g);
-}
-
-function drawHouse(world: Container, col: number, row: number) {
-  const x = col * TILE_SIZE;
-  const y = row * TILE_SIZE;
-  const g = new Graphics();
-  const w = 80, h = 60, roofH = 40;
-  // ombre portée
-  g.ellipse(x + w / 2, y + h + 6, w / 2, 10).fill({ color: C.shadow, alpha: 0.15 });
-  // mur côté (ombre)
-  g.rect(x + w, y + roofH / 2, 12, h).fill(C.housWall2);
-  // mur face
-  g.rect(x, y + roofH / 2, w, h).fill(C.housWall);
-  // toit côté
-  g.poly([x + w, y + roofH / 2, x + w + 12, y + roofH / 2 + 8, x + w + 12, y + roofH / 2]).fill(C.housRoof2);
-  // toit face
-  g.poly([x - 6, y + roofH / 2, x + w / 2, y, x + w + 6, y + roofH / 2]).fill(C.housRoof);
-  // fenêtre gauche
-  g.roundRect(x + 8, y + roofH / 2 + 10, 20, 16, 2).fill(C.housWin);
-  g.rect(x + 17, y + roofH / 2 + 10, 2, 16).fill({ color: 0xffffff, alpha: 0.5 });
-  g.rect(x + 8, y + roofH / 2 + 17, 20, 2).fill({ color: 0xffffff, alpha: 0.5 });
-  // fenêtre droite
-  g.roundRect(x + w - 28, y + roofH / 2 + 10, 20, 16, 2).fill(C.housWin);
-  g.rect(x + w - 19, y + roofH / 2 + 10, 2, 16).fill({ color: 0xffffff, alpha: 0.5 });
-  g.rect(x + w - 28, y + roofH / 2 + 17, 20, 2).fill({ color: 0xffffff, alpha: 0.5 });
-  // porte
-  g.roundRect(x + w / 2 - 10, y + roofH / 2 + h - 28, 20, 28, 3).fill(C.housDoor);
-  g.circle(x + w / 2 + 6, y + roofH / 2 + h - 14, 2).fill(0xf0c040);
-  // cheminée
-  g.rect(x + w - 20, y - 4, 10, roofH / 2 + 4).fill(C.rockDark);
-  g.rect(x + w - 22, y - 8, 14, 6).fill(C.rock);
-  world.addChild(g);
-}
+// Décor en pixel art (voir src/lib/pixelArt.ts). seed = variété (forme/couleur/taille)
+function drawCactus(world: Container, cx: number, cy: number, s: number)      { pxCactus(world, cx, cy, s); }
+function drawPalmTree(world: Container, cx: number, cy: number, s: number)    { pxPalm(world, cx, cy, s); }
+function drawSnowTree(world: Container, cx: number, cy: number, s: number)    { pxSnowTree(world, cx, cy, s); }
+function drawSwampTree(world: Container, cx: number, cy: number, s: number)   { pxSwampTree(world, cx, cy, s); }
+function drawMountainRock(world: Container, cx: number, cy: number, s: number){ pxMountainRock(world, cx, cy, s); }
+function drawTree(world: Container, cx: number, cy: number, s: number)        { pxTree(world, cx, cy, s); }
+function drawRock(world: Container, cx: number, cy: number, s: number)        { pxRock(world, cx, cy, s); }
+function drawHouse(world: Container, col: number, row: number, s: number)     { pxHouse(world, col, row, TILE_SIZE, s); }
 
 const PLACED_TREES = [
   // Bordure nord
@@ -269,23 +229,13 @@ const PLACED_TREES = [
   [20,75],[22,73],[18,72],[15,77],[25,70],[30,78],[35,72],[40,75],[45,70],[50,77],[55,73],[60,76],[65,72],[70,75],[75,70],[80,77],[85,73],[90,76],[95,72],[100,75],[105,70],[110,77],[115,73],[120,76],[125,72],[130,75],[135,70],[140,77],
 ];
 
-const PLACED_ROCKS = [
-  [8,20],[15,35],[25,18],[35,55],[45,30],[55,20],[65,38],[75,22],[85,55],[95,35],[105,20],[115,42],[125,28],[135,55],[145,35],
-  [8,100],[15,85],[25,102],[35,65],[45,90],[55,100],[65,82],[75,98],[85,65],[95,85],[105,100],[115,78],[125,92],[135,65],[145,85],
-  [30,58],[50,62],[70,58],[90,62],[110,58],[130,62],
-];
+// Rochers générés procéduralement dans le biome montagne (voir boucle dans useEffect)
 
 const PLACED_HOUSES = [
-  // Village centre
-  [55,50],[68,50],[81,50],[55,65],[68,65],[81,65],
-  // Village nord-ouest
-  [15,20],[28,20],[15,32],[28,32],
-  // Village nord-est
-  [115,20],[128,20],[115,32],[128,32],
-  // Village sud-ouest
-  [15,88],[28,88],[15,100],[28,100],
-  // Village sud-est
-  [115,88],[128,88],[115,100],[128,100],
+  // Village centre (biome "village" garanti : |dx|<30, |dy|<25 depuis centre 75,60)
+  [60,48],[72,48],[84,48],
+  [60,60],[72,60],[84,60],
+  [60,72],[72,72],[84,72],
 ];
 
 export default function GameCanvas({ room, username }: Props) {
@@ -327,131 +277,163 @@ export default function GameCanvas({ room, username }: Props) {
       containerRef.current.appendChild(app.canvas);
 
       const world = new Container();
+      world.sortableChildren = true;
       app.stage.addChild(world);
 
-      // Sol
-      const ground = new Graphics();
+      // ----- Chargement du pack Sprout Lands -----
+      const charTex = await Assets.load("/tiles/sl_char.png") as Texture;
+      if (destroyed) { app.destroy(true); return; }
+      charTex.source.scaleMode = "nearest";
+
+      // Frames du personnage : 4 directions × 4 frames (idle + 3 walk)
+      type Dir = "down" | "up" | "right" | "left";
+      const CHAR_SCALE = TILE_SIZE / 8; // 4× → sprite 56×64px
+      const mkFrames = (y: number, x0: number, w: number) =>
+        [0, 1, 2, 3].map(i => new Texture({ source: charTex.source, frame: new Rectangle(x0 + i * 48, y, w, 16) }));
+      const CHAR_FRAMES: Record<Dir, Texture[]> = {
+        down:  mkFrames(16,  17, 14),
+        up:    mkFrames(64,  17, 14),
+        right: mkFrames(160, 19, 10),
+        left:  mkFrames(112, 19, 10),
+      };
+
+      const SCALE = TILE_SIZE / 16; // art 16px -> tuiles 32px
       const mapData = generateMap();
-      for (let r = 0; r < MAP_ROWS; r++)
-        for (let c = 0; c < MAP_COLS; c++)
-          drawTile(ground, c * TILE_SIZE, r * TILE_SIZE, mapData[r][c], c, r);
-      world.addChild(ground);
 
-      // Arbres — fonction selon biome
+      // Sol pixel art custom (drawTile — biome + texture + fleurs + touffes)
+      const groundG = new Graphics();
+      groundG.zIndex = 0;
+      for (let r = 0; r < MAP_ROWS; r++) {
+        for (let c = 0; c < MAP_COLS; c++) {
+          drawTile(groundG, c * TILE_SIZE, r * TILE_SIZE, mapData[r][c], c, r);
+        }
+      }
+      world.addChild(groundG);
+
+      // --- Hitboxes des objets ---
+      type CircleHit = { kind: "circle"; cx: number; cy: number; r: number };
+      type RectHit   = { kind: "rect";   x: number;  y: number;  w: number; h: number };
+      type Hit = CircleHit | RectHit;
+      const hitboxes: Hit[] = [];
+
+      // Maisons : rectangle précis sur la zone murs/façade
+      for (const [c, r] of PLACED_HOUSES) {
+        const seed = (c * 37 + r * 53) >>> 0;
+        const hb = getHouseHitbox(c, r, TILE_SIZE, seed);
+        hitboxes.push({ kind: "rect", ...hb });
+      }
+
+      // Arbres pixel art selon biome — zIndex = baseY pour tri de profondeur
       for (const [c, r] of PLACED_TREES) {
-        const px = c * TILE_SIZE + TILE_SIZE / 2;
-        const py = r * TILE_SIZE + TILE_SIZE / 2;
+        const cx   = c * TILE_SIZE + TILE_SIZE / 2;
+        const cy   = r * TILE_SIZE + TILE_SIZE;
+        const seed = (c * 131 + r * 73) >>> 0;
         const biome = getBiome(c, r);
-        if (biome === "desert")   drawCactus(world, px, py);
-        else if (biome === "beach")    drawPalmTree(world, px, py);
-        else if (biome === "snow")     drawSnowTree(world, px, py);
-        else if (biome === "swamp")    drawSwampTree(world, px, py);
-        else                           drawTree(world, px, py);
+        if      (biome === "snow")     drawSnowTree(world, cx, cy, seed);
+        else if (biome === "desert")   drawCactus(world, cx, cy, seed);
+        else if (biome === "beach")    drawPalmTree(world, cx, cy, seed);
+        else if (biome === "swamp")    drawSwampTree(world, cx, cy, seed);
+        else if (biome === "mountain") drawMountainRock(world, cx, cy, seed);
+        else                           drawTree(world, cx, cy, seed);
+        world.children[world.children.length - 1].zIndex = cy;
+        hitboxes.push({ kind: "circle", cx, cy: cy - 4, r: TILE_SIZE * 0.55 });
       }
 
-      // Rochers — montagne = gros rocher stylisé
-      for (const [c, r] of PLACED_ROCKS) {
-        const px = c * TILE_SIZE + TILE_SIZE / 2;
-        const py = r * TILE_SIZE + TILE_SIZE / 2;
-        if (getBiome(c, r) === "mountain") drawMountainRock(world, px, py);
-        else drawRock(world, px, py);
+      // Décorations de sol : buissons, fleurs, touffes d'herbe
+      const bushG = new Graphics();
+      bushG.zIndex = 1;
+      world.addChild(bushG);
+      for (let r = 0; r < MAP_ROWS; r++) {
+        for (let c = 0; c < MAP_COLS; c++) {
+          if (mapData[r][c] !== 0) continue;
+          const seed = (c * 131 + r * 97) >>> 0;
+          const biome = getBiome(c, r);
+          const roll = rnd(c, r, 51);
+          if (roll < 0.04) {
+            // buisson
+            const px = c * TILE_SIZE + 6 + Math.floor(rnd(c, r, 55) * 20);
+            const py = r * TILE_SIZE + 22 + Math.floor(rnd(c, r, 57) * 8);
+            decorBush(bushG, px, py, seed);
+          } else if (roll < 0.10 && (biome === "village" || biome === "forest")) {
+            // fleurs (village et forêt seulement)
+            const px = c * TILE_SIZE + 4 + Math.floor(rnd(c, r, 60) * 24);
+            const py = r * TILE_SIZE + 8 + Math.floor(rnd(c, r, 62) * 16);
+            decorFlowers(bushG, px, py, seed);
+          } else if (roll < 0.14 && biome !== "desert" && biome !== "beach") {
+            // touffe d'herbe
+            const px = c * TILE_SIZE + 4 + Math.floor(rnd(c, r, 70) * 24);
+            const py = r * TILE_SIZE + 10 + Math.floor(rnd(c, r, 72) * 14);
+            decorGrassTuft(bushG, px, py, seed);
+          }
+        }
       }
 
-      // Maisons
-      for (const [c, r] of PLACED_HOUSES)
-        drawHouse(world, c, r);
+      // Rochers de montagne — procéduraux, uniquement dans le biome montagne
+      for (let r = 0; r < MAP_ROWS; r++) {
+        for (let c = 0; c < MAP_COLS; c++) {
+          if (mapData[r][c] !== 0) continue;
+          if (getBiome(c, r) !== "mountain") continue;
+          const roll1 = rnd(c, r, 80);
+          const roll2 = rnd(c, r, 81);
+          if (roll1 < 0.06 || (roll1 < 0.12 && roll2 < 0.4)) {
+            const seed = (c * 197 + r * 41) >>> 0;
+            const cx = c * TILE_SIZE + TILE_SIZE / 2 + Math.floor(rnd(c, r, 82) * 8 - 4);
+            const cy = r * TILE_SIZE + TILE_SIZE;
+            drawMountainRock(world, cx, cy, seed);
+            world.children[world.children.length - 1].zIndex = cy;
+            hitboxes.push({ kind: "circle", cx, cy: cy - 6, r: TILE_SIZE * 0.7 });
+          }
+        }
+      }
+
+      // Maisons pixel art — zIndex = pied de la façade (bas du mur avant)
+      for (const [c, r] of PLACED_HOUSES) {
+        const seed = (c * 37 + r * 53) >>> 0;
+        drawHouse(world, c, r, TILE_SIZE, seed);
+        world.children[world.children.length - 1].zIndex = (r + 1) * TILE_SIZE;
+      }
 
       // Joueurs
       const playerSprites = new Map<string, Container>();
-      const playerParts   = new Map<string, { legL: Container; legR: Container; armL: Container; armR: Container; upper: Container; walkTime: number; moving: boolean; }>();
+      const playerParts   = new Map<string, { sprite: Sprite; walkTime: number; moving: boolean; dir: Dir }>();
 
-      function createPlayerSprite(id: string, name: string, isLocal: boolean) {
+      function createPlayerSprite(id: string, name: string) {
         const container = new Container();
-        const color    = isLocal ? 0x6c63ff : 0x43aa8b;
-        const pantsCol = isLocal ? 0x4a4080 : 0x2d6a55;
-        const skin     = 0xffd6a5;
 
-        // Shadow
         const shadow = new Graphics();
-        shadow.ellipse(10, 30, 9, 4).fill({ color: C.shadow, alpha: 0.18 });
+        shadow.ellipse(0, 2, 10, 4).fill({ color: 0x000000, alpha: 0.2 });
         container.addChild(shadow);
 
-        // Jambes — chaque jambe dans son propre Container pour animer via y
-        const legL = new Container();
-        const legLg = new Graphics().roundRect(0, 0, 6, 10, 2).fill(pantsCol);
-        legL.addChild(legLg);
-        legL.x = 3; legL.y = 18;
-        container.addChild(legL);
-
-        const legR = new Container();
-        const legRg = new Graphics().roundRect(0, 0, 6, 10, 2).fill(pantsCol);
-        legR.addChild(legRg);
-        legR.x = 11; legR.y = 18;
-        container.addChild(legR);
-
-        // Upper body (corps + bras + tête) dans un Container pour le bob
-        const upper = new Container();
-
-        const body = new Graphics().roundRect(2, 8, 16, 12, 3).fill(color);
-        upper.addChild(body);
-
-        const collar = new Graphics().roundRect(6, 7, 8, 4, 2).fill(isLocal ? 0x9b8fff : 0x5ecba1);
-        upper.addChild(collar);
-
-        const armL = new Container();
-        const armLg = new Graphics().roundRect(0, 0, 4, 9, 2).fill(color);
-        armL.addChild(armLg);
-        armL.x = 0; armL.y = 9;
-        upper.addChild(armL);
-
-        const armR = new Container();
-        const armRg = new Graphics().roundRect(0, 0, 4, 9, 2).fill(color);
-        armR.addChild(armRg);
-        armR.x = 16; armR.y = 9;
-        upper.addChild(armR);
-
-        const head = new Graphics().roundRect(3, -10, 14, 14, 5).fill(skin);
-        upper.addChild(head);
-        const eyeL = new Graphics().circle(7, -4, 1.5).fill(0x333333);
-        upper.addChild(eyeL);
-        const eyeR = new Graphics().circle(13, -4, 1.5).fill(0x333333);
-        upper.addChild(eyeR);
-        const hair = new Graphics().roundRect(3, -12, 14, 6, 4).fill(isLocal ? 0x3d2b1f : 0x2b3d1f);
-        upper.addChild(hair);
-
-        container.addChild(upper);
+        const sprite = new Sprite(CHAR_FRAMES.down[0]);
+        sprite.anchor.set(0.5, 1);
+        sprite.scale.set(CHAR_SCALE);
+        container.addChild(sprite);
 
         const label = new Text({ text: name, style: new TextStyle({ fontSize: 9, fill: 0xffffff, fontFamily: "monospace", dropShadow: { color: 0x000000, blur: 2, distance: 1 } }) });
-        label.x = 10 - label.width / 2;
-        label.y = -24;
+        label.x = -label.width / 2;
+        label.y = -CHAR_SCALE * 16 - 12;
         container.addChild(label);
 
-        playerParts.set(id, { legL, legR, armL, armR, upper, walkTime: 0, moving: false });
+        playerParts.set(id, { sprite, walkTime: 0, moving: false, dir: "down" });
         world.addChild(container);
         playerSprites.set(id, container);
         return container;
       }
 
-      // ticker global d'animation
+      // ticker global : animation + tri z des joueurs
       app.ticker.add((ticker) => {
-        const deltaMS = ticker.deltaMS;
-        playerParts.forEach((parts) => {
+        playerParts.forEach((parts, id) => {
           if (parts.moving) {
-            parts.walkTime += deltaMS * 0.007;
-            const swing = Math.sin(parts.walkTime);
-            parts.legL.y  = 18 + swing * 6;
-            parts.legR.y  = 18 - swing * 6;
-            parts.armL.y  = 9  - swing * 5;
-            parts.armR.y  = 9  + swing * 5;
-            parts.upper.y = -Math.abs(swing) * 2;
+            parts.walkTime += ticker.deltaMS;
+            const frame = Math.floor(parts.walkTime / 120) % 4;
+            parts.sprite.texture = CHAR_FRAMES[parts.dir][frame];
           } else {
             parts.walkTime = 0;
-            parts.legL.y  = 18;
-            parts.legR.y  = 18;
-            parts.armL.y  = 9;
-            parts.armR.y  = 9;
-            parts.upper.y = 0;
+            parts.sprite.texture = CHAR_FRAMES[parts.dir][0];
           }
+          // mise à jour du zIndex pour la profondeur
+          const container = playerSprites.get(id);
+          if (container) container.zIndex = container.y;
         });
       });
 
@@ -494,32 +476,38 @@ export default function GameCanvas({ room, username }: Props) {
       const startX = selfState?.x ?? (MAP_COLS * TILE_SIZE) / 2;
       const startY = selfState?.y ?? (MAP_ROWS * TILE_SIZE) / 2;
 
-      const localSprite = createPlayerSprite(room.id, username, true);
+      const localSprite = createPlayerSprite(room.id, username);
       localSprite.x = startX;
       localSprite.y = startY;
       const localParts = playerParts.get(room.id)!;
 
       room.players.forEach((p) => {
-        if (p.id === room.id) return; // ne pas recréer le joueur local
-        const s = createPlayerSprite(p.id, p.username, false);
+        if (p.id === room.id) return;
+        const s = createPlayerSprite(p.id, p.username);
         s.x = p.x; s.y = p.y;
       });
 
       room.onMessage((msg) => {
         if (msg.type === "player_join") {
           if (msg.player.id === room.id) return;
-          const s = createPlayerSprite(msg.player.id, msg.player.username, false);
+          const s = createPlayerSprite(msg.player.id, msg.player.username);
           s.x = msg.player.x; s.y = msg.player.y;
         }
         if (msg.type === "player_leave") {
           const s = playerSprites.get(msg.id);
-          if (s) { world.removeChild(s); playerSprites.delete(msg.id); }
+          if (s) { world.removeChild(s); playerSprites.delete(msg.id); playerParts.delete(msg.id); }
         }
         if (msg.type === "player_move") {
           const s = playerSprites.get(msg.id);
-          if (s) { s.x = msg.x; s.y = msg.y; }
           const p = playerParts.get(msg.id);
-          if (p) p.moving = msg.moving ?? true;
+          if (s && p) {
+            const dx = msg.x - s.x, dy = msg.y - s.y;
+            if (Math.abs(dx) > Math.abs(dy)) p.dir = dx > 0 ? "right" : "left";
+            else if (dy !== 0) p.dir = dy > 0 ? "down" : "up";
+            s.x = msg.x; s.y = msg.y;
+            s.zIndex = msg.y;
+            p.moving = msg.moving ?? true;
+          }
         }
         if (msg.type === "chat") {
           const s = msg.id === room.id ? localSprite : playerSprites.get(msg.id);
@@ -588,34 +576,54 @@ export default function GameCanvas({ room, username }: Props) {
       mmLocalDot.circle(0, 0, 3).fill(0xffffff).circle(0, 0, 3).stroke({ color: 0x6c63ff, width: 2 });
       minimap.addChild(mmLocalDot);
 
+      const PLAYER_R = 7; // rayon de collision du joueur
+      function collidesAt(px: number, py: number): boolean {
+        for (const h of hitboxes) {
+          if (h.kind === "circle") {
+            const ddx = px - h.cx, ddy = py - h.cy;
+            if (ddx * ddx + ddy * ddy < (PLAYER_R + h.r) * (PLAYER_R + h.r)) return true;
+          } else {
+            // cercle-rectangle : point le plus proche du centre joueur dans le rect
+            const nearX = Math.max(h.x, Math.min(px, h.x + h.w));
+            const nearY = Math.max(h.y, Math.min(py, h.y + h.h));
+            const ddx = px - nearX, ddy = py - nearY;
+            if (ddx * ddx + ddy * ddy < PLAYER_R * PLAYER_R) return true;
+          }
+        }
+        return false;
+      }
+
       let localX = startX;
       let localY = startY;
       let wasMoving = false;
 
       app.ticker.add(() => {
-        let dx = 0, dy = 0, direction = "down";
-        if (isDown("arrowup")    || isDown("z")) { dy = -1; direction = "up"; }
-        if (isDown("arrowdown")  || isDown("s")) { dy =  1; direction = "down"; }
-        if (isDown("arrowleft")  || isDown("q")) { dx = -1; direction = "left"; }
-        if (isDown("arrowright") || isDown("d")) { dx =  1; direction = "right"; }
+        let dx = 0, dy = 0;
+        let dir: Dir = localParts.dir;
+        if (isDown("arrowup")    || isDown("z")) { dy = -1; dir = "up"; }
+        if (isDown("arrowdown")  || isDown("s")) { dy =  1; dir = "down"; }
+        if (isDown("arrowleft")  || isDown("q")) { dx = -1; dir = "left"; }
+        if (isDown("arrowright") || isDown("d")) { dx =  1; dir = "right"; }
 
         const speed = isDown("shift") ? RUN_SPEED : WALK_SPEED;
         dx *= speed; dy *= speed;
 
         const isMoving = dx !== 0 || dy !== 0;
         localParts.moving = isMoving;
+        localParts.dir = dir;
 
         if (isMoving) {
-          localX = Math.max(0, Math.min(MAP_COLS * TILE_SIZE - 20, localX + dx));
-          localY = Math.max(0, Math.min(MAP_ROWS * TILE_SIZE - 24, localY + dy));
+          // tentative axe X puis Y séparément (sliding le long des obstacles)
+          const nx = Math.max(0, Math.min(MAP_COLS * TILE_SIZE - 20, localX + dx));
+          const ny = Math.max(0, Math.min(MAP_ROWS * TILE_SIZE - 24, localY + dy));
+          if (!collidesAt(nx, localY)) localX = nx;
+          if (!collidesAt(localX, ny)) localY = ny;
           localSprite.x = localX;
           localSprite.y = localY;
-          room.send("move", { x: localX, y: localY, direction, moving: true });
-          // mémorise la position pour rejoindre au même endroit après reconnexion
+          room.send("move", { x: localX, y: localY, direction: dir, moving: true });
           try { localStorage.setItem("void_pos_main", JSON.stringify({ x: localX, y: localY })); } catch {}
         } else if (wasMoving) {
-          // envoie une seule fois le stop
-          room.send("move", { x: localX, y: localY, direction, moving: false });
+          room.send("move", { x: localX, y: localY, direction: dir, moving: false });
           try { localStorage.setItem("void_pos_main", JSON.stringify({ x: localX, y: localY })); } catch {}
         }
         wasMoving = isMoving;
