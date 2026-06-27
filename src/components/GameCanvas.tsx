@@ -210,7 +210,7 @@ function drawSwampTree(world: Container, cx: number, cy: number, s: number)   { 
 function drawMountainRock(world: Container, cx: number, cy: number, s: number){ pxMountainRock(world, cx, cy, s); }
 function drawTree(world: Container, cx: number, cy: number, s: number)        { pxTree(world, cx, cy, s); }
 function drawRock(world: Container, cx: number, cy: number, s: number)        { pxRock(world, cx, cy, s); }
-function drawHouse(world: Container, col: number, row: number, s: number)     { pxHouse(world, col, row, TILE_SIZE, s); }
+function drawHouse(world: Container, col: number, row: number, _s: number, seed: number) { pxHouse(world, col, row, TILE_SIZE, seed); }
 
 const PLACED_TREES = [
   // Bordure nord
