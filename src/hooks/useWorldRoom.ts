@@ -9,6 +9,7 @@ export interface PlayerState {
   y: number;
   direction: string;
   moving: boolean;
+  charCfg?: object;
 }
 
 export interface WorldRoom {
@@ -18,7 +19,7 @@ export interface WorldRoom {
   onMessage: (handler: (msg: any) => void) => void;
 }
 
-export function useWorldRoom(username: string, roomName: string = "main") {
+export function useWorldRoom(username: string, roomName: string = "main", charCfg?: object) {
   const [room, setRoom] = useState<WorldRoom | null>(null);
   const [connected, setConnected] = useState(false);
   const [onlinePlayers, setOnlinePlayers] = useState<Map<string, PlayerState>>(new Map());
@@ -65,7 +66,7 @@ export function useWorldRoom(username: string, roomName: string = "main") {
           const raw = localStorage.getItem(`void_pos_${roomName}`);
           if (raw) pos = JSON.parse(raw);
         } catch {}
-        ws.send(JSON.stringify({ type: "join", username, x: pos?.x, y: pos?.y }));
+        ws.send(JSON.stringify({ type: "join", username, x: pos?.x, y: pos?.y, charCfg }));
 
         // keepalive : évite la coupure des connexions inactives (auto-réponse serveur)
         if (pingTimer) clearInterval(pingTimer);

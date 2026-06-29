@@ -449,42 +449,33 @@ export default function GameCanvas({ room, username, charCfg, onEnterBiome }: Pr
       portalTooltip.addChild(ttBg, ttText);
       app.stage.addChild(portalTooltip);
 
-      // Joueurs — paper doll Mana Seed
+      // Joueurs — paper doll Mana Seed pour tous
       const playerSprites = new Map<string, Container>();
       const playerDolls   = new Map<string, PlayerDoll>();
-      // Fallback pixel art pour les joueurs dont on ne connaît pas le perso
-      type PlayerAnim = { legL: Graphics; legR: Graphics; body: Graphics; walkTime: number; step: number };
-      const playerAnims = new Map<string, PlayerAnim>();
+      // État mouvement des autres joueurs (pour animation)
+      type OtherState = { moving: boolean; dir: DollDir };
+      const otherState  = new Map<string, OtherState>();
 
-      function createFallbackSprite(id: string, name: string, isLocal = false): Container {
-        const container = new Container();
-        const shadow = new Graphics();
-        shadow.ellipse(0, 2, 12, 5).fill({ color: 0x000000, alpha: 0.22 });
-        container.addChild(shadow);
-        const body = new Graphics(); drawPixelCharBody(body, isLocal); container.addChild(body);
-        const legL = new Graphics(); drawPixelLeg(legL, isLocal, false); legL.x = LEG_L_X; legL.y = LEG_Y; container.addChild(legL);
-        const legR = new Graphics(); drawPixelLeg(legR, isLocal, true);  legR.x = LEG_R_X; legR.y = LEG_Y; container.addChild(legR);
-        const label = new Text({ text: name, style: new TextStyle({ fontSize: 9, fill: 0xffffff, fontFamily: "monospace", dropShadow: { color: 0x000000, blur: 2, distance: 1 } }) });
-        label.x = -label.width / 2; label.y = -(CHAR_ABOVE + 4);
-        container.addChild(label);
-        playerAnims.set(id, { legL, legR, body, walkTime: 0, step: 0 });
-        world.addChild(container);
-        playerSprites.set(id, container);
-        return container;
+      async function createOtherDoll(id: string, name: string, cfg: CharConfig | null) {
+        const doll = await loadDoll(cfg ?? loadCharConfig(), name, false, world, app!);
+        playerDolls.set(id, doll);
+        playerSprites.set(id, doll.container);
+        otherState.set(id, { moving: false, dir: 'down' });
+        return doll;
       }
 
-      // ticker global : animation portails + fontaine + walk cycle
+      // ticker global : portails + fontaine + animation autres joueurs
       let portalTime = 0;
       app.ticker.add((ticker) => {
         portalTime += ticker.deltaMS;
         animateFountain(fountainWater, plazaCX, plazaCY, portalTime);
         for (const p of portals) animatePortal(p.inner, p.cx, p.cy, p.biome, portalTime);
-      });
-
-      app.ticker.add((ticker) => {
-        playerAnims.forEach((anim, id) => {
-          const container = playerSprites.get(id);
-          if (container) container.zIndex = container.y;
+        // Anime les autres joueurs
+        playerDolls.forEach((doll, id) => {
+          if (id === room.id) return;
+          const st = otherState.get(id);
+          if (st) tickDoll(doll, st.moving, st.dir, ticker.deltaMS);
+          doll.container.zIndex = doll.container.y;
         });
       });
 
@@ -539,26 +530,30 @@ export default function GameCanvas({ room, username, charCfg, onEnterBiome }: Pr
       localDoll.container.x = startX;
       localDoll.container.y = startY;
 
-      // Autres joueurs — pixel art fallback (on ne connaît pas leur config)
+      // Autres joueurs déjà connectés
       room.players.forEach((p) => {
         if (p.id === room.id) return;
-        const s = createFallbackSprite(p.id, p.username, false);
-        s.x = p.x; s.y = p.y;
+        createOtherDoll(p.id, p.username, p.charCfg as CharConfig | null).then(doll => {
+          doll.container.x = p.x; doll.container.y = p.y;
+        });
       });
 
       room.onMessage((msg) => {
         if (msg.type === "player_join") {
           if (msg.player.id === room.id) return;
-          const s = createFallbackSprite(msg.player.id, msg.player.username, false);
-          s.x = msg.player.x; s.y = msg.player.y;
+          createOtherDoll(msg.player.id, msg.player.username, msg.player.charCfg ?? null).then(doll => {
+            doll.container.x = msg.player.x; doll.container.y = msg.player.y;
+          });
         }
         if (msg.type === "player_leave") {
           const s = playerSprites.get(msg.id);
-          if (s) { world.removeChild(s); playerSprites.delete(msg.id); playerAnims.delete(msg.id); playerDolls.delete(msg.id); }
+          if (s) { world.removeChild(s); playerSprites.delete(msg.id); playerDolls.delete(msg.id); otherState.delete(msg.id); }
         }
         if (msg.type === "player_move") {
-          const s = playerSprites.get(msg.id);
-          if (s) { s.x = msg.x; s.y = msg.y; s.zIndex = msg.y; }
+          const doll = playerDolls.get(msg.id);
+          const st   = otherState.get(msg.id);
+          if (doll) { doll.container.x = msg.x; doll.container.y = msg.y; }
+          if (st) { st.moving = msg.moving ?? false; st.dir = (msg.direction as DollDir) ?? 'down'; }
         }
         if (msg.type === "chat") {
           const s = msg.id === room.id ? localDoll.container : playerSprites.get(msg.id);

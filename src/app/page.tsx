@@ -21,7 +21,7 @@ export default function Home() {
   const [activeRoom, setActiveRoom] = useState("main");
   const [charCfg, setCharCfg] = useState<CharConfig | null>(null);
   const [showPicker, setShowPicker] = useState(false);
-  const { room, connected, onlinePlayers } = useWorldRoom(started ? username : "", activeRoom);
+  const { room, connected, onlinePlayers } = useWorldRoom(started ? username : "", activeRoom, charCfg ?? undefined);
 
   useEffect(() => {
     if (session) {
