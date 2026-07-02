@@ -7,6 +7,7 @@ import { drawPortalFull, animatePortal, BIOME_COLORS, type BiomeKey } from "@/li
 import { drawPixelCharBody, drawPixelLeg, LEG_L_X, LEG_R_X, LEG_Y, CHAR_ABOVE } from "@/lib/pixelChar";
 import { type CharConfig, loadCharConfig } from "@/lib/charConfig";
 import { loadDoll, tickDoll, unloadDollTextures, type PlayerDoll, type Dir as DollDir } from "@/lib/charSprite";
+import { MiniGame, MINI_GAMES, drawGameSign } from "@/lib/miniGames";
 
 interface Props {
   room: WorldRoom;
@@ -50,6 +51,7 @@ export default function BiomeCanvas({ room, username, biome, charCfg, onExit }: 
   useEffect(() => {
     let app: Application | null = null;
     let destroyed = false;
+    let cleanupGame: (() => void) | null = null;
 
     const keys = new Set<string>();
     const isDown = (k: string) => keys.has(k);
@@ -118,6 +120,38 @@ export default function BiomeCanvas({ room, username, biome, charCfg, onExit }: 
       });
       biomeLbl.x = 20; biomeLbl.y = 20;
       app.stage.addChild(biomeLbl);
+
+      // ---- Mini-jeu du biome ----
+      const gameDef = MINI_GAMES[biome];
+      const signX = exitX - 160;
+      const signY = exitY;
+      drawGameSign(world, signX, signY, gameDef);
+      const miniGame = new MiniGame(biome, world, app.stage, MAP_COLS * TILE_SIZE, MAP_ROWS * TILE_SIZE, {
+        onEnd: (score, best) => {
+          endLbl.text = `${gameDef.name} terminé !\nScore : ${score} ★   Record : ${best}`;
+          endLbl.x = app!.screen.width / 2 - endLbl.width / 2;
+          endLbl.y = app!.screen.height / 2 - 120;
+          endLbl.visible = true;
+          endLblUntil = performance.now() + 5000;
+        },
+      });
+      // Consigne (visible près du panneau)
+      const signTip = new Text({
+        text: gameDef.desc, style: new TextStyle({
+          fontSize: 13, fill: 0xffe080, fontFamily: "monospace",
+          dropShadow: { color: 0x000000, blur: 3, distance: 1 } }),
+      });
+      signTip.visible = false;
+      app.stage.addChild(signTip);
+      // Message de fin
+      const endLbl = new Text({
+        text: "", style: new TextStyle({
+          fontSize: 18, fill: 0xffffff, fontFamily: "monospace", fontWeight: "bold", align: "center",
+          dropShadow: { color: 0x000000, blur: 4, distance: 2 } }),
+      });
+      endLbl.visible = false;
+      app.stage.addChild(endLbl);
+      let endLblUntil = 0;
 
       // Joueurs — paper doll Mana Seed (local) + pixel art fallback (autres)
       const playerSprites = new Map<string, Container>();
@@ -205,7 +239,8 @@ export default function BiomeCanvas({ room, username, biome, charCfg, onExit }: 
         if (isDown("arrowdown")  || isDown("s")) dy =  1;
         if (isDown("arrowleft")  || isDown("q")) dx = -1;
         if (isDown("arrowright") || isDown("d")) dx =  1;
-        const speed = isDown("shift") ? RUN_SPEED : WALK_SPEED;
+        let speed = isDown("shift") ? RUN_SPEED : WALK_SPEED;
+        if (miniGame.isStunned) speed *= 0.25; // étourdi → très lent
         dx *= speed; dy *= speed;
 
         const nx = Math.max(PLAYER_R, Math.min(MAP_COLS * TILE_SIZE - PLAYER_R, localX + dx));
@@ -229,9 +264,25 @@ export default function BiomeCanvas({ room, username, biome, charCfg, onExit }: 
           moveTimer = 0;
         }
 
-        // Proximité portail de sortie
+        // Mini-jeu : update + lancement au panneau
+        miniGame.update(ticker.deltaMS, localX, localY);
+        const dsx = localX - signX, dsy = localY - (signY - 30);
+        const nearSign = dsx * dsx + dsy * dsy < 56 * 56;
+        signTip.visible = nearSign && !miniGame.running;
+        if (signTip.visible) {
+          signTip.x = app!.screen.width / 2 - signTip.width / 2;
+          signTip.y = app!.screen.height - 90;
+        }
+        if (nearSign && !miniGame.running && isDown("e")) {
+          keys.delete("e");
+          endLbl.visible = false;
+          miniGame.start(localX, localY);
+        }
+        if (endLbl.visible && performance.now() > endLblUntil) endLbl.visible = false;
+
+        // Proximité portail de sortie (désactivé pendant une partie)
         const dex = localX - exitX, dey = localY - (exitY - 40);
-        if (dex * dex + dey * dey < EXIT_R * EXIT_R && isDown("e")) {
+        if (!miniGame.running && dex * dex + dey * dey < EXIT_R * EXIT_R && isDown("e")) {
           keys.delete("e");
           fadeRef.current = { active: true, alpha: 0, dir: "out" };
         }
@@ -244,12 +295,15 @@ export default function BiomeCanvas({ room, username, biome, charCfg, onExit }: 
 
       // Fondu d'entrée initial
       fadeOverlay.rect(0, 0, app.screen.width, app.screen.height).fill({ color: 0x000000, alpha: 1 });
+
+      cleanupGame = () => miniGame.destroy();
     })();
 
     return () => {
       destroyed = true;
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup",   onKeyUp);
+      cleanupGame?.();
       appRef.current?.destroy(true);
       appRef.current = null;
     };
